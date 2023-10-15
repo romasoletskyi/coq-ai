@@ -1,12 +1,12 @@
+use anyhow::{bail, Ok, Result};
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::{vec::Vec, fmt};
-use anyhow::{Result, bail, Ok};
+use std::{fmt, vec::Vec};
 
 #[derive(Debug)]
 struct ModuleArg {
     dir: String,
-    coqdir: String
+    coqdir: String,
 }
 
 impl fmt::Display for ModuleArg {
@@ -17,12 +17,15 @@ impl fmt::Display for ModuleArg {
 
 pub struct CoqProject {
     args: Vec<ModuleArg>,
-    pub files: Vec<String>
+    pub files: Vec<String>,
 }
 
 impl CoqProject {
     fn new() -> Self {
-        CoqProject { args: Vec::new(), files: Vec::new() }
+        CoqProject {
+            args: Vec::new(),
+            files: Vec::new(),
+        }
     }
 }
 
@@ -47,14 +50,17 @@ fn parse_arg(line: &str, path: &str) -> Result<ModuleArg> {
     if words.len() != 3 {
         bail!("parse_arg got -R with invalid number of arguments");
     }
-    Ok(ModuleArg { dir: path.to_owned() + words[1], coqdir: words[2].to_owned()})
+    Ok(ModuleArg {
+        dir: path.to_owned() + words[1],
+        coqdir: words[2].to_owned(),
+    })
 }
 
 pub fn read_project(path: &str) -> Result<CoqProject> {
     let mut project = CoqProject::new();
     let file = File::open(path.to_owned() + PROJECT_FILE)?;
     let reader = BufReader::new(file);
-    
+
     for line_result in reader.lines() {
         let line_check = line_result?;
         let line = line_check.trim();

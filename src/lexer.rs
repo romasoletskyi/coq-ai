@@ -1,22 +1,40 @@
-use anyhow::{Result, bail};
-use std::str::Chars;
+use anyhow::{bail, Result};
 use std::ops::Index;
+use std::str::Chars;
 
 #[derive(Debug, PartialEq)]
 pub enum CoqTokenKind {
-    Dot, Comma, SemiColon, 
-    Colon, DoubleColon, Define, 
-    Dash, Arrow,
-    Less, LessEq, BackArrow, Equiv,
-    Greater, GreaterEq,
-    Eq, Case, NotEq,
-    BracketLeft, BracketRight, 
-    BracketSquareLeft, BracketSquareRight,
-    BracketCurlyLeft, BracketCurlyRight,
-    Plus, Star,
-    And, Or, Not,
-    Pipe, Question,
-    Word(String)
+    Dot,
+    Comma,
+    SemiColon,
+    Colon,
+    DoubleColon,
+    Define,
+    Dash,
+    Arrow,
+    Less,
+    LessEq,
+    BackArrow,
+    Equiv,
+    Greater,
+    GreaterEq,
+    Eq,
+    Case,
+    NotEq,
+    BracketLeft,
+    BracketRight,
+    BracketSquareLeft,
+    BracketSquareRight,
+    BracketCurlyLeft,
+    BracketCurlyRight,
+    Plus,
+    Star,
+    And,
+    Or,
+    Not,
+    Pipe,
+    Question,
+    Word(String),
 }
 
 impl std::fmt::Display for CoqTokenKind {
@@ -52,7 +70,7 @@ impl std::fmt::Display for CoqTokenKind {
             Self::Not => "~",
             Self::Pipe => "|",
             Self::Question => "?",
-            Self::Word(s) => &s
+            Self::Word(s) => &s,
         };
         write!(f, "{}", text)
     }
@@ -62,7 +80,7 @@ impl std::fmt::Display for CoqTokenKind {
 enum TokenError {
     EOF,
     NoMatch,
-    UnexpectedSymbol
+    UnexpectedSymbol,
 }
 
 impl std::fmt::Display for TokenError {
@@ -70,13 +88,14 @@ impl std::fmt::Display for TokenError {
         match self {
             Self::EOF => write!(f, "unexpected EOF"),
             Self::NoMatch => write!(f, "no match with predicate"),
-            Self::UnexpectedSymbol => write!(f, "unexpected symbol")
+            Self::UnexpectedSymbol => write!(f, "unexpected symbol"),
         }
     }
 }
 
 fn take_while<F>(data: &str, mut pred: F) -> Result<(&str, usize)>
-where F: FnMut(char) -> bool 
+where
+    F: FnMut(char) -> bool,
 {
     let mut length: usize = 0;
     for c in data.chars() {
@@ -88,14 +107,14 @@ where F: FnMut(char) -> bool
     }
     if length == 0 {
         bail!(TokenError::NoMatch);
-    } 
+    }
     Ok((&data[..length], length))
 }
 
 fn skip_whitespace(data: &str) -> usize {
     match take_while(data, |c| c.is_whitespace()) {
         Ok((_, size)) => size,
-        _ => 0
+        _ => 0,
     }
 }
 
@@ -115,7 +134,7 @@ fn skip_comments(data: &str) -> usize {
 fn get_next_char(it: &mut Chars<'_>) -> Result<char> {
     match it.next() {
         Some(c) => Ok(c),
-        None => bail!(TokenError::EOF)
+        None => bail!(TokenError::EOF),
     }
 }
 
@@ -128,7 +147,7 @@ fn tokenize_word(data: &str) -> Result<(CoqTokenKind, usize)> {
         } else {
             false
         };
-        c.is_alphanumeric() || c == '_' || c == '\''  || start
+        c.is_alphanumeric() || c == '_' || c == '\'' || start
     })?;
     Ok((CoqTokenKind::Word(word.to_owned()), size))
 }
@@ -137,57 +156,50 @@ fn get_next_token(data: &str) -> Result<(CoqTokenKind, usize)> {
     let mut it = data.chars();
     let next = match it.next() {
         Some(c) => c,
-        None => bail!(TokenError::EOF)
+        None => bail!(TokenError::EOF),
     };
     let result = match next {
-        ':' => 
-            match get_next_char(&mut it)? {
-                '=' => (CoqTokenKind::Define, 2),
-                ':' => (CoqTokenKind::DoubleColon, 2),
-                _ => (CoqTokenKind::Colon, 1)
-            }
-        '-' => 
-            match get_next_char(&mut it)? {
-                '>' => (CoqTokenKind::Arrow, 2),
-                _ => (CoqTokenKind::Dash, 1)
-            }
-        '<' => 
-            match get_next_char(&mut it)? {
-                '-' => 
-                    match get_next_char(&mut it)? {
-                        '>' => (CoqTokenKind::Equiv, 3),
-                        _ => (CoqTokenKind::BackArrow, 2)
-                    }
-                '>' => (CoqTokenKind::NotEq, 2),
-                '=' => (CoqTokenKind::LessEq, 2),
-                _ => (CoqTokenKind::Less, 1)
-            }
-        '>' => 
-            match get_next_char(&mut it)? {
-                '=' => (CoqTokenKind::GreaterEq, 2),
-                _ => (CoqTokenKind::Greater, 1)
-            }
-        '=' => 
-            match get_next_char(&mut it)? {
-                '>' => (CoqTokenKind::Case, 2),
-                _ => (CoqTokenKind::Eq, 1)
-            }
-        '/' => 
-            match get_next_char(&mut it)? {
-                '\\' => (CoqTokenKind::And, 2),
-                _ => bail!(TokenError::UnexpectedSymbol)
-            }
-        '\\' => 
-            match get_next_char(&mut it)? {
-                '/' => (CoqTokenKind::Or, 2),
-                _ => bail!(TokenError::UnexpectedSymbol)
-            }
-        '?' =>             
+        ':' => match get_next_char(&mut it)? {
+            '=' => (CoqTokenKind::Define, 2),
+            ':' => (CoqTokenKind::DoubleColon, 2),
+            _ => (CoqTokenKind::Colon, 1),
+        },
+        '-' => match get_next_char(&mut it)? {
+            '>' => (CoqTokenKind::Arrow, 2),
+            _ => (CoqTokenKind::Dash, 1),
+        },
+        '<' => match get_next_char(&mut it)? {
+            '-' => match get_next_char(&mut it)? {
+                '>' => (CoqTokenKind::Equiv, 3),
+                _ => (CoqTokenKind::BackArrow, 2),
+            },
+            '>' => (CoqTokenKind::NotEq, 2),
+            '=' => (CoqTokenKind::LessEq, 2),
+            _ => (CoqTokenKind::Less, 1),
+        },
+        '>' => match get_next_char(&mut it)? {
+            '=' => (CoqTokenKind::GreaterEq, 2),
+            _ => (CoqTokenKind::Greater, 1),
+        },
+        '=' => match get_next_char(&mut it)? {
+            '>' => (CoqTokenKind::Case, 2),
+            _ => (CoqTokenKind::Eq, 1),
+        },
+        '/' => match get_next_char(&mut it)? {
+            '\\' => (CoqTokenKind::And, 2),
+            _ => bail!(TokenError::UnexpectedSymbol),
+        },
+        '\\' => match get_next_char(&mut it)? {
+            '/' => (CoqTokenKind::Or, 2),
+            _ => bail!(TokenError::UnexpectedSymbol),
+        },
+        '?' => {
             if get_next_char(&mut it)?.is_whitespace() {
                 (CoqTokenKind::Question, 1)
             } else {
                 tokenize_word(data)?
             }
+        }
         '.' => (CoqTokenKind::Dot, 1),
         ',' => (CoqTokenKind::Comma, 1),
         ';' => (CoqTokenKind::SemiColon, 1),
@@ -201,7 +213,7 @@ fn get_next_token(data: &str) -> Result<(CoqTokenKind, usize)> {
         '*' => (CoqTokenKind::Star, 1),
         '~' => (CoqTokenKind::Not, 1),
         '|' => (CoqTokenKind::Pipe, 1),
-        _ => tokenize_word(data)?
+        _ => tokenize_word(data)?,
     };
     Ok(result)
 }
@@ -210,7 +222,7 @@ fn get_next_token(data: &str) -> Result<(CoqTokenKind, usize)> {
 pub struct CoqToken {
     pub kind: CoqTokenKind,
     start: usize,
-    end: usize 
+    end: usize,
 }
 
 impl std::fmt::Display for CoqToken {
@@ -219,6 +231,7 @@ impl std::fmt::Display for CoqToken {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct CoqTokenSlice<'a>(&'a [CoqToken]);
 
 impl<'a> CoqTokenSlice<'a> {
@@ -226,10 +239,16 @@ impl<'a> CoqTokenSlice<'a> {
         self.0.is_empty()
     }
 
-    pub fn cut (&mut self, index: usize) -> CoqTokenSlice<'a> {
+    pub fn cut(&mut self, index: usize) -> CoqTokenSlice<'a> {
         let part = CoqTokenSlice(&self.0[..index]);
         self.0 = &self.0[index..];
         part
+    }
+}
+
+impl<'a> From<&'a [CoqToken]> for CoqTokenSlice<'a> {
+    fn from(value: &'a [CoqToken]) -> Self {
+        CoqTokenSlice(value)
     }
 }
 
@@ -241,16 +260,10 @@ impl<'a> Index<usize> for CoqTokenSlice<'a> {
     }
 }
 
-impl<'a> From<&'a [CoqToken]> for CoqTokenSlice<'a> {
-    fn from(value: &'a [CoqToken]) -> Self {
-        CoqTokenSlice(value)
-    }
-}
-
 impl<'a> std::fmt::Display for CoqTokenSlice<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let length = self.0.len();
-        for i in 0..length - 1{
+        for i in 0..length - 1 {
             write!(f, "{} ", self.0[i].kind)?;
         }
         write!(f, "{}", self.0[length - 1].kind)
@@ -259,12 +272,15 @@ impl<'a> std::fmt::Display for CoqTokenSlice<'a> {
 
 pub struct CoqTokenizer<'a> {
     index: usize,
-    text: &'a str
+    text: &'a str,
 }
 
 impl<'a> CoqTokenizer<'a> {
     pub fn new(data: &'a str) -> Self {
-        CoqTokenizer { index: 0, text: data}
+        CoqTokenizer {
+            index: 0,
+            text: data,
+        }
     }
 
     pub fn next(&mut self) -> Result<Option<CoqToken>> {
@@ -274,7 +290,11 @@ impl<'a> CoqTokenizer<'a> {
         } else {
             let (kind, size) = get_next_token(self.text)?;
             self.chomp(size);
-            Ok(Some(CoqToken{kind, start: self.index - size, end: self.index}))
+            Ok(Some(CoqToken {
+                kind,
+                start: self.index - size,
+                end: self.index,
+            }))
         }
     }
 
@@ -298,4 +318,15 @@ impl<'a> CoqTokenizer<'a> {
         }
         self.text = remainder;
     }
+}
+
+pub fn tokenize(data: &str) -> Vec<CoqToken> {
+    let mut tokenizer = CoqTokenizer::new(&data);
+    let mut tokens = Vec::new();
+
+    while let Some(token) = tokenizer.next().unwrap() {
+        tokens.push(token);
+    }
+
+    tokens
 }
