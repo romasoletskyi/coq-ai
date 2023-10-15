@@ -2,7 +2,7 @@ use anyhow::{bail, Result};
 use std::ops::Index;
 use std::str::Chars;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CoqTokenKind {
     Dot,
     Comma,
@@ -70,23 +70,23 @@ impl std::fmt::Display for CoqTokenKind {
             Self::Not => "~",
             Self::Pipe => "|",
             Self::Question => "?",
-            Self::Word(s) => &s,
+            Self::Word(s) => s,
         };
         write!(f, "{}", text)
     }
 }
 
 #[derive(Debug)]
-enum TokenError {
-    EOF,
+enum LexerError {
+    Eof,
     NoMatch,
     UnexpectedSymbol,
 }
 
-impl std::fmt::Display for TokenError {
+impl std::fmt::Display for LexerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::EOF => write!(f, "unexpected EOF"),
+            Self::Eof => write!(f, "unexpected EOF"),
             Self::NoMatch => write!(f, "no match with predicate"),
             Self::UnexpectedSymbol => write!(f, "unexpected symbol"),
         }
@@ -106,7 +106,7 @@ where
         }
     }
     if length == 0 {
-        bail!(TokenError::NoMatch);
+        bail!(LexerError::NoMatch);
     }
     Ok((&data[..length], length))
 }
@@ -134,7 +134,7 @@ fn skip_comments(data: &str) -> usize {
 fn get_next_char(it: &mut Chars<'_>) -> Result<char> {
     match it.next() {
         Some(c) => Ok(c),
-        None => bail!(TokenError::EOF),
+        None => bail!(LexerError::Eof),
     }
 }
 
@@ -156,7 +156,7 @@ fn get_next_token(data: &str) -> Result<(CoqTokenKind, usize)> {
     let mut it = data.chars();
     let next = match it.next() {
         Some(c) => c,
-        None => bail!(TokenError::EOF),
+        None => bail!(LexerError::Eof),
     };
     let result = match next {
         ':' => match get_next_char(&mut it)? {
@@ -187,11 +187,11 @@ fn get_next_token(data: &str) -> Result<(CoqTokenKind, usize)> {
         },
         '/' => match get_next_char(&mut it)? {
             '\\' => (CoqTokenKind::And, 2),
-            _ => bail!(TokenError::UnexpectedSymbol),
+            _ => bail!(LexerError::UnexpectedSymbol),
         },
         '\\' => match get_next_char(&mut it)? {
             '/' => (CoqTokenKind::Or, 2),
-            _ => bail!(TokenError::UnexpectedSymbol),
+            _ => bail!(LexerError::UnexpectedSymbol),
         },
         '?' => {
             if get_next_char(&mut it)?.is_whitespace() {
@@ -218,7 +218,7 @@ fn get_next_token(data: &str) -> Result<(CoqTokenKind, usize)> {
     Ok(result)
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct CoqToken {
     pub kind: CoqTokenKind,
     start: usize,
@@ -237,6 +237,10 @@ pub struct CoqTokenSlice<'a>(&'a [CoqToken]);
 impl<'a> CoqTokenSlice<'a> {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.len()
     }
 
     pub fn cut(&mut self, index: usize) -> CoqTokenSlice<'a> {
@@ -321,7 +325,7 @@ impl<'a> CoqTokenizer<'a> {
 }
 
 pub fn tokenize(data: &str) -> Vec<CoqToken> {
-    let mut tokenizer = CoqTokenizer::new(&data);
+    let mut tokenizer = CoqTokenizer::new(data);
     let mut tokens = Vec::new();
 
     while let Some(token) = tokenizer.next().unwrap() {

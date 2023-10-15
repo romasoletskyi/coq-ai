@@ -6,7 +6,7 @@ use rexpect::session::PtySession;
 use rexpect::spawn;
 
 use crate::lexer::{tokenize, CoqTokenKind, CoqTokenSlice};
-use crate::parser::{get_names};
+use crate::parser::get_names;
 use crate::project::{prepare_program, CoqProject};
 
 static COQ_REGEX: &str = "\r\n[^< ]+ < ";
@@ -65,7 +65,7 @@ impl DefinitionStorage {
         } else {
             self.bag.insert(def.clone(), self.index);
             self.def.insert(self.index, def);
-            let ind = self.index; 
+            let ind = self.index;
             self.index.0 += 1;
             ind
         };
@@ -100,7 +100,7 @@ impl CoqContext {
 
     fn update(&mut self, process: &mut PtySession, query: CoqTokenSlice) -> Result<()> {
         let mut names = VecDeque::new();
-        for name in get_names(query) {
+        for name in get_names(query)? {
             names.push_back(name);
         }
 
@@ -112,7 +112,7 @@ impl CoqContext {
 
                 let answer_tokens = tokenize(&answer);
                 let tokens = CoqTokenSlice::from(answer_tokens.as_slice());
-                for s in get_names(tokens) {
+                for s in get_names(tokens)? {
                     names.push_front(s);
                 }
             }
