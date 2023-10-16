@@ -1,5 +1,5 @@
 use anyhow::{bail, Ok, Result};
-use std::fmt::Display;
+use std::{fmt::Display, collections::HashSet};
 
 use crate::lexer::{CoqToken, CoqTokenKind, CoqTokenSlice};
 
@@ -259,14 +259,60 @@ impl Display for Theorem {
 }
 
 #[derive(Debug, PartialEq)]
+struct Constructor {
+    name: String,
+    binders: Vec<Binder>,
+    term: Option<Box<Type>>
+}
+
+impl Display for Constructor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)?;
+        for binder in &self.binders {
+            write!(f, " {}", binder)?;
+        }
+        if let Some(term) = &self.term {
+            write!(f, " : {}", term)?;
+        }
+        std::fmt::Result::Ok(())
+    }
+}
+
+static INDUCTIVE: &str = "Inductive";
+
+#[derive(Debug, PartialEq)]
+struct Inductive {
+    name: String,
+    binders: Vec<Binder>,
+    term: Box<Type>,
+    constructors: Vec<Constructor>
+}
+
+impl Display for Inductive {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Inductive {}", self.name)?;
+        for binder in &self.binders {
+            write!(f, " {}", binder)?;
+        }
+        write!(f, " : {} := ", self.term)?;
+        for i in 0..self.constructors.len()-1 {
+            write!(f, "{} |", self.constructors[i])?;
+        }
+        write!(f, " {}.", self.constructors[self.constructors.len()-1])
+    }
+}
+
+#[derive(Debug, PartialEq)]
 enum CoqExpression {
     Theorem(Theorem),
+    Inductive(Inductive)
 }
 
 impl Display for CoqExpression {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
             CoqExpression::Theorem(theorem) => write!(f, "{}", theorem),
+            CoqExpression::Inductive(def) => write!(f, "{}", def)
         }
     }
 }
@@ -299,7 +345,7 @@ impl<'a> CoqParser<'a> {
         self.index += 1;
     }
 
-    fn parse_type(&mut self, until: CoqTokenKind) -> Result<Box<Type>> {
+    fn parse_type(&mut self, pred: fn(&CoqTokenKind) -> bool) -> Result<Box<Type>> {
         if let CoqTokenKind::Word(word) = &self.current()?.kind {
             if word == FORALL {
                 self.advance();
@@ -307,18 +353,18 @@ impl<'a> CoqParser<'a> {
                 self.advance();
                 return Ok(Box::new(Type::ForAll(ForAll {
                     binder,
-                    has: self.parse_type(until)?,
+                    has: self.parse_type(pred)?,
                 })));
             }
         }
 
         if let CoqTokenKind::BracketLeft = &self.current()?.kind {
             self.advance();
-            let term = self.parse_type(CoqTokenKind::BracketRight)?;
+            let term = self.parse_type(|kind| &CoqTokenKind::BracketRight == kind)?;
             self.advance();
             let next = self.peek()?;
 
-            if until == next.kind {
+            if pred(&next.kind) {
                 return Ok(term);
             }
             if CoqTokenKind::Arrow == next.kind {
@@ -326,7 +372,7 @@ impl<'a> CoqParser<'a> {
                 self.advance();
                 return Ok(Box::new(Type::Fun(Fun {
                     from: term,
-                    to: self.parse_type(until)?,
+                    to: self.parse_type(pred)?,
                 })));
             }
             bail!(ParserError::UnexpectedToken(self.current()?.clone()))
@@ -340,9 +386,9 @@ impl<'a> CoqParser<'a> {
                 self.advance();
                 return Ok(Box::new(Type::Fun(Fun {
                     from,
-                    to: self.parse_type(until)?,
+                    to: self.parse_type(pred)?,
                 })));
-            } else if until == token.kind {
+            } else if pred(&token.kind) {
                 return Ok(Box::new(Type::Custom(tokens)));
             }
             tokens.push(token.clone());
@@ -373,7 +419,7 @@ impl<'a> CoqParser<'a> {
                 }
 
                 self.advance();
-                let term = self.parse_type(CoqTokenKind::BracketRight)?;
+                let term = self.parse_type(|token| &CoqTokenKind::BracketRight == token)?;
 
                 self.advance();
                 Ok(Binder::Explicit(ExplicitBinder { names, term }))
@@ -395,7 +441,7 @@ impl<'a> CoqParser<'a> {
 
                 self.advance();
                 let term = if seen_colon {
-                    let term = self.parse_type(CoqTokenKind::BracketCurlyRight)?;
+                    let term = self.parse_type(|token| &CoqTokenKind::BracketCurlyRight == token)?;
                     self.advance();
                     Some(term)
                 } else {
@@ -420,7 +466,7 @@ impl<'a> CoqParser<'a> {
         //      forall (open_binders), (type)
         if CoqTokenKind::Colon == self.current()?.kind {
             self.advance();
-            let term = self.parse_type(CoqTokenKind::Comma)?;
+            let term = self.parse_type(|token| &CoqTokenKind::Comma == token)?;
             Ok(OpenBinders::OpenBinder(OpenBinder { names, term }))
         } else {
             let binders = if names.is_empty() {
@@ -454,41 +500,262 @@ impl<'a> CoqParser<'a> {
                 token,
                 binders,
                 name,
-                term: self.parse_type(CoqTokenKind::Dot)?,
+                term: self.parse_type(|token| &CoqTokenKind::Dot == token)?,
             });
+        }
+        bail!(ParserError::UnexpectedToken(self.current()?.clone()));
+    }
+
+    fn parse_constructor(&mut self) -> Result<Constructor> {
+        let kind = self.current()?.kind.clone();
+        if let CoqTokenKind::Word(name) = kind {
+            self.advance();
+            let mut binders = Vec::new();
+            while CoqTokenKind::Colon != self.current()?.kind {
+                binders.push(self.parse_binder()?);
+            }
+
+            let pred = |token: &CoqTokenKind| &CoqTokenKind::Dot == token || &CoqTokenKind::Pipe == token;
+            let term = if pred(&self.current()?.kind) {
+                None
+            } else {
+                if CoqTokenKind::Colon != self.current()?.kind {
+                    bail!(ParserError::UnexpectedToken(self.current()?.clone()));
+                }
+                self.advance();
+                Some(self.parse_type(pred)?)
+            };
+
+            return Ok(Constructor { name, binders, term });
+        }
+        bail!(ParserError::UnexpectedToken(self.current()?.clone()));
+    }
+
+    fn parse_inductive(&mut self) -> Result<Inductive> {
+        self.advance();
+        let kind = self.current()?.kind.clone();
+        if let CoqTokenKind::Word(name) = kind {
+            self.advance();
+            let mut binders = Vec::new();
+            while CoqTokenKind::Colon != self.current()?.kind {
+                binders.push(self.parse_binder()?);
+            }
+
+            self.advance();
+            let term = self.parse_type(|token| &CoqTokenKind::Define == token)?;
+            self.advance();
+
+            let mut constructors = Vec::new();
+            while CoqTokenKind::Dot != self.current()?.kind {
+                if CoqTokenKind::Pipe == self.current()?.kind {
+                    self.advance();
+                }
+                constructors.push(self.parse_constructor()?);
+            }
+
+            return Ok(Inductive { name, binders, term, constructors });
         }
         bail!(ParserError::UnexpectedToken(self.current()?.clone()));
     }
 
     fn parse_expression(&mut self) -> Result<CoqExpression> {
         let token = self.current()?;
-        if let CoqTokenKind::Word(_) = &token.kind {
+        if let CoqTokenKind::Word(word) = &token.kind {
             if let std::result::Result::Ok(token) = TheoremToken::try_from(token) {
                 return Ok(CoqExpression::Theorem(self.parse_theorem(token)?));
+            }
+            if word.as_str() == INDUCTIVE {
+                return Ok(CoqExpression::Inductive(self.parse_inductive()?));
             }
         }
         bail!(ParserError::UnexpectedQuery);
     }
 }
 
+struct NameCollector {
+    known: HashSet<String>,
+    seen: HashSet<String>,
+    register: Vec<String>,
+    bottom: Vec<usize>
+}
+
+impl NameCollector {
+    fn new() -> Self {
+        NameCollector { known: HashSet::new(), seen: HashSet::new(), register: Vec::new(), bottom: Vec::new() }
+    }
+
+    fn open(&mut self) {
+        self.bottom.push(self.register.len());
+    }
+
+    fn register(&mut self, name: &String) {
+        if !self.known.contains(name) {
+            self.known.insert(name.clone());
+            self.register.push(name.clone());
+        }
+    }
+
+    fn see(&mut self, word: &String) {
+        if !self.known.contains(word) && !self.seen.contains(word) {
+            self.seen.insert(word.clone());
+        }
+    }
+
+    fn close(&mut self) {
+        if let Some(until) = self.bottom.pop() {
+            let length = self.register.len();
+            for _ in until..length {
+                let name = self.register.pop().unwrap();
+                self.known.remove(&name);
+            }
+        }
+    }
+
+    fn collect(mut self) -> Vec<String> {
+        self.seen.drain().collect()
+    }
+
+    fn get_binder_names(&mut self, binder: &Binder) {
+        match binder {
+            Binder::Explicit(explicit) => {
+                for name in &explicit.names {
+                    self.register(name);
+                }
+                self.get_type_names(&explicit.term);
+            },
+            Binder::Implicit(implicit) => {
+                for name in &implicit.names {
+                    self.register(name);
+                }
+                if let Some(term) = &implicit.term {
+                    self.get_type_names(term);
+                }
+            },
+            Binder::Simple(simple) => self.register(&simple.name)
+        }
+    }
+
+    fn get_open_binders_names(&mut self, binder: &Box<OpenBinders>) {
+        match &**binder {
+            OpenBinders::Binders(binders) => {
+                for binder in &binders.binders {
+                    self.get_binder_names(binder);
+                }
+            },
+            OpenBinders::OpenBinder(binder) => {
+                for name in &binder.names {
+                    self.register(name);
+                    self.get_type_names(&binder.term);
+                }
+            }
+        }
+    }
+
+    fn get_type_names(&mut self, term: &Box<Type>) {
+        match &**term {
+            Type::ForAll(forall) => {
+                self.open();
+                self.get_open_binders_names(&forall.binder);
+                self.get_type_names(&forall.has);
+                self.close();
+            },
+            Type::Fun(fun) => {
+                self.get_type_names(&fun.from);
+                self.get_type_names(&fun.to);
+            },
+            Type::Custom(tokens) => {
+                for token in tokens {
+                    if let CoqTokenKind::Word(word) = &token.kind {
+                        self.see(word);
+                    }
+                }
+            }
+        }
+    }
+
+    fn get_theorem_names(&mut self, theorem: &Theorem) {
+        self.open();
+        for binder in &theorem.binders {
+            self.get_binder_names(binder);
+        }
+        self.get_type_names(&theorem.term);
+        self.close();
+    }
+
+    fn get_constructor_names(&mut self, constructor: &Constructor) {
+        self.open();
+        for binder in &constructor.binders {
+            self.get_binder_names(binder);
+        }
+        if let Some(term) = &constructor.term {
+            self.get_type_names(term);
+        }
+        self.close();
+    }
+
+    fn get_inductive_names(&mut self, inductive: &Inductive) {
+        self.open();
+        for binder in &inductive.binders {
+            self.get_binder_names(binder);
+        }
+        self.get_type_names(&inductive.term);
+        for constructor in &inductive.constructors {
+            self.get_constructor_names(constructor);
+        }
+        self.close();
+    }
+
+    fn get_expression_names(&mut self, expression: &CoqExpression) {
+        match expression {
+            CoqExpression::Theorem(theorem) => self.get_theorem_names(theorem),
+            CoqExpression::Inductive(inductive) => self.get_inductive_names(inductive)
+        }
+    }
+}
+
 pub fn get_names(query: CoqTokenSlice) -> Result<Vec<String>> {
     let mut parser = CoqParser::new(query);
     let expression = parser.parse_expression()?;
-    todo!()
+    let mut collector = NameCollector::new();
+    collector.get_expression_names(&expression);
+    Ok(collector.collect())
 }
 
 #[cfg(test)]
 mod tests {
     use super::CoqParser;
-    use crate::lexer::{tokenize, CoqTokenSlice};
+    use crate::{lexer::{tokenize, CoqTokenSlice}, parser::NameCollector};
 
-    #[test]
-    fn plus_n_sm() {
-        let theorem = "Theorem plus_n_Sm : forall n m : nat, S (n + m) = n + (S m).";
-        let tokens = tokenize(theorem);
+    fn check(data: &str) {
+        let tokens = tokenize(data);
+        println!("{:?}", tokens);
+
         let mut parser = CoqParser::new(CoqTokenSlice::from(tokens.as_slice()));
         let expr = parser.parse_expression().unwrap();
+
         println!("{}", expr);
         println!("{:?}", expr);
+
+        let mut collector = NameCollector::new();
+        collector.get_expression_names(&expr);
+        let names = collector.collect();
+
+        println!("{:?}", names);
+    }
+
+    #[test]
+    fn theorem_plus_n_sm() {
+        check("Theorem plus_n_Sm : forall n m : nat, S (n + m) = n + (S m).");
+    }
+
+    #[test]
+    fn inductive_nat() {
+        check("Inductive nat : Set :=  O : nat | S : nat -> nat.");
+    }
+
+    #[test]
+    fn inductive_le() {
+        // think about module paths A.B.C
+        check("Inductive le (n : nat) : nat -> Prop := le_n : n <= n | le_S : forall m : nat, n <= m -> n <= S m.");
     }
 }
