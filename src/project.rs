@@ -76,7 +76,7 @@ pub fn read_project(path: &str) -> Result<CoqProject> {
 }
 
 pub(crate) fn prepare_program(project: &CoqProject) -> String {
-    let mut program = "coqtop".to_owned();
+    let mut program = "coqtop -color off".to_owned();
     for arg in &project.args {
         program.push_str(&format!(" {}", arg));
     }

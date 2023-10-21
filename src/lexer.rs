@@ -34,6 +34,9 @@ pub enum CoqTokenKind {
     Not,
     Pipe,
     Question,
+    Underscore,
+    Percent,
+    NewLine,
     Word(String),
 }
 
@@ -70,6 +73,9 @@ impl std::fmt::Display for CoqTokenKind {
             Self::Not => "~",
             Self::Pipe => "|",
             Self::Question => "?",
+            Self::Underscore => "_",
+            Self::Percent => "%",
+            Self::NewLine => "\n",
             Self::Word(s) => s,
         };
         write!(f, "{}", text)
@@ -93,13 +99,37 @@ impl std::fmt::Display for LexerError {
     }
 }
 
+struct CharPeeker<'a> {
+    chars: Chars<'a>,
+    next: Option<char>,
+}
+
+impl<'a> CharPeeker<'a> {
+    fn new(mut chars: Chars<'a>) -> Self {
+        let next = chars.next();
+        CharPeeker { chars, next }
+    }
+}
+
+impl<'a> Iterator for CharPeeker<'a> {
+    type Item = (char, Option<char>);
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(current) = self.next {
+            self.next = self.chars.next();
+            Some((current, self.next))
+        } else {
+            None
+        }
+    }
+}
+
 fn take_while<F>(data: &str, mut pred: F) -> Result<(&str, usize)>
 where
-    F: FnMut(char) -> bool,
+    F: FnMut(char, Option<char>) -> bool,
 {
     let mut length: usize = 0;
-    for c in data.chars() {
-        if pred(c) {
+    for (c, next) in CharPeeker::new(data.chars()) {
+        if pred(c, next) {
             length += c.len_utf8();
         } else {
             break;
@@ -111,10 +141,10 @@ where
     Ok((&data[..length], length))
 }
 
-fn skip_whitespace(data: &str) -> usize {
-    match take_while(data, |c| c.is_whitespace()) {
-        Ok((_, size)) => size,
-        _ => 0,
+fn skip_whitespace(data: &str) -> (usize, bool) {
+    match take_while(data, |c, _| c.is_whitespace()) {
+        Ok((space, size)) => (size, space.contains("\n")),
+        _ => (0, false),
     }
 }
 
@@ -140,14 +170,19 @@ fn get_next_char(it: &mut Chars<'_>) -> Result<char> {
 
 fn tokenize_word(data: &str) -> Result<(CoqTokenKind, usize)> {
     let mut first = true;
-    let (word, size) = take_while(data, |c| {
-        let start = if first {
+    let (word, size) = take_while(data, |c, next| {
+        if first {
             first = false;
-            c == '?' || c == '@'
+            c.is_alphanumeric() || c == '_'
         } else {
-            false
-        };
-        c.is_alphanumeric() || c == '_' || c == '\'' || start
+            let allow_dot = c == '.'
+                && if let Some(next) = next {
+                    next.is_alphabetic() || next == '_'
+                } else {
+                    false
+                };
+            c.is_alphanumeric() || c == '_' || c == '\'' || allow_dot
+        }
     })?;
     Ok((CoqTokenKind::Word(word.to_owned()), size))
 }
@@ -200,6 +235,14 @@ fn get_next_token(data: &str) -> Result<(CoqTokenKind, usize)> {
                 tokenize_word(data)?
             }
         }
+        '_' => {
+            let c = get_next_char(&mut it)?;
+            if c.is_alphanumeric() || c == '_' || c == '\'' {
+                tokenize_word(data)?
+            } else {
+                (CoqTokenKind::Underscore, 1)
+            }
+        }
         '.' => (CoqTokenKind::Dot, 1),
         ',' => (CoqTokenKind::Comma, 1),
         ';' => (CoqTokenKind::SemiColon, 1),
@@ -213,6 +256,7 @@ fn get_next_token(data: &str) -> Result<(CoqTokenKind, usize)> {
         '*' => (CoqTokenKind::Star, 1),
         '~' => (CoqTokenKind::Not, 1),
         '|' => (CoqTokenKind::Pipe, 1),
+        '%' => (CoqTokenKind::Percent, 1),
         _ => tokenize_word(data)?,
     };
     Ok(result)
@@ -288,7 +332,14 @@ impl<'a> CoqTokenizer<'a> {
     }
 
     pub fn next(&mut self) -> Result<Option<CoqToken>> {
-        self.skip();
+        let (size, new_line) = self.skip();
+        if new_line {
+            return Ok(Some(CoqToken {
+                kind: CoqTokenKind::NewLine,
+                start: self.index - size,
+                end: self.index,
+            }));
+        }
         if self.text.is_empty() {
             Ok(None)
         } else {
@@ -307,20 +358,28 @@ impl<'a> CoqTokenizer<'a> {
         self.text = &self.text[amount..];
     }
 
-    fn skip(&mut self) {
+    fn skip(&mut self) -> (usize, bool) {
         let mut remainder = self.text;
+        let mut new_line = false;
+        let mut size = 0;
         loop {
-            let whitespace = skip_whitespace(remainder);
+            let (whitespace, delimiter) = skip_whitespace(remainder);
             remainder = &remainder[whitespace..];
+            if delimiter {
+                new_line = true;
+            }
 
             let comments = skip_comments(remainder);
             remainder = &remainder[comments..];
 
+            size += whitespace + comments;
             if whitespace + comments == 0 {
                 break;
             }
         }
+        self.index += size;
         self.text = remainder;
+        (size, new_line)
     }
 }
 
@@ -333,4 +392,22 @@ pub fn tokenize(data: &str) -> Vec<CoqToken> {
     }
 
     tokens
+}
+
+mod tests {
+    use crate::lexer::tokenize;
+
+    #[test]
+    fn compact() {
+        let tokens = tokenize(
+            "Definition compact (X:TopologicalSpace) :=
+        forall C:Family X,
+          (forall U:Ensemble X, In C U -> open U) ->
+          FamilyUnion C = Full_set ->
+          exists C':Family X,
+            Finite C' /\\ Included C' C /\\
+            FamilyUnion C' = Full_set.",
+        );
+        println!("{:?}", tokens);
+    }
 }
