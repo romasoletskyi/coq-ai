@@ -92,9 +92,9 @@ enum LexerError {
 impl std::fmt::Display for LexerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Eof => write!(f, "unexpected EOF"),
-            Self::NoMatch => write!(f, "no match with predicate"),
-            Self::UnexpectedSymbol => write!(f, "unexpected symbol"),
+            Self::Eof => write!(f, "LexerError: EOF"),
+            Self::NoMatch => write!(f, "LexerError: no match with predicate"),
+            Self::UnexpectedSymbol => write!(f, "LexerError: unexpected symbol"),
         }
     }
 }
@@ -235,14 +235,16 @@ fn get_next_token(data: &str) -> Result<(CoqTokenKind, usize)> {
                 tokenize_word(data)?
             }
         }
-        '_' => {
-            let c = get_next_char(&mut it)?;
-            if c.is_alphanumeric() || c == '_' || c == '\'' {
-                tokenize_word(data)?
-            } else {
-                (CoqTokenKind::Underscore, 1)
+        '_' => match get_next_char(&mut it) {
+            Ok(c) => {
+                if c.is_alphanumeric() || c == '_' || c == '\'' {
+                    tokenize_word(data)?
+                } else {
+                    (CoqTokenKind::Underscore, 1)
+                }
             }
-        }
+            _ => (CoqTokenKind::Underscore, 1),
+        },
         '.' => (CoqTokenKind::Dot, 1),
         ',' => (CoqTokenKind::Comma, 1),
         ';' => (CoqTokenKind::SemiColon, 1),
@@ -267,6 +269,12 @@ pub struct CoqToken {
     pub kind: CoqTokenKind,
     start: usize,
     end: usize,
+}
+
+impl CoqToken {
+    pub fn new(kind: CoqTokenKind, start: usize, end: usize) -> Self {
+        CoqToken { kind, start, end }
+    }
 }
 
 impl std::fmt::Display for CoqToken {
@@ -300,6 +308,12 @@ impl<'a> From<&'a [CoqToken]> for CoqTokenSlice<'a> {
     }
 }
 
+impl<'a> Into<Vec<CoqToken>> for CoqTokenSlice<'a> {
+    fn into(self) -> Vec<CoqToken> {
+        self.0.iter().map(|x| x.clone()).collect()
+    }
+}
+
 impl<'a> Index<usize> for CoqTokenSlice<'a> {
     type Output = CoqToken;
 
@@ -321,19 +335,21 @@ impl<'a> std::fmt::Display for CoqTokenSlice<'a> {
 pub struct CoqTokenizer<'a> {
     index: usize,
     text: &'a str,
+    save_whitespace: bool,
 }
 
 impl<'a> CoqTokenizer<'a> {
-    pub fn new(data: &'a str) -> Self {
+    fn new(data: &'a str, save_whitespace: bool) -> Self {
         CoqTokenizer {
             index: 0,
             text: data,
+            save_whitespace,
         }
     }
 
-    pub fn next(&mut self) -> Result<Option<CoqToken>> {
+    fn next(&mut self) -> Result<Option<CoqToken>> {
         let (size, new_line) = self.skip();
-        if new_line {
+        if self.save_whitespace && new_line {
             return Ok(Some(CoqToken {
                 kind: CoqTokenKind::NewLine,
                 start: self.index - size,
@@ -381,17 +397,24 @@ impl<'a> CoqTokenizer<'a> {
         self.text = remainder;
         (size, new_line)
     }
+
+    fn tokenize(&mut self) -> Result<Vec<CoqToken>> {
+        let mut tokens = Vec::new();
+        while let Some(token) = self.next()? {
+            tokens.push(token);
+        }
+        Ok(tokens)
+    }
 }
 
-pub fn tokenize(data: &str) -> Vec<CoqToken> {
-    let mut tokenizer = CoqTokenizer::new(data);
-    let mut tokens = Vec::new();
+pub fn tokenize(data: &str) -> Result<Vec<CoqToken>> {
+    let mut tokenizer = CoqTokenizer::new(data, false);
+    tokenizer.tokenize()
+}
 
-    while let Some(token) = tokenizer.next().unwrap() {
-        tokens.push(token);
-    }
-
-    tokens
+pub fn tokenize_whitespace(data: &str) -> Result<Vec<CoqToken>> {
+    let mut tokenizer = CoqTokenizer::new(data, true);
+    tokenizer.tokenize()
 }
 
 mod tests {
@@ -406,7 +429,7 @@ mod tests {
           FamilyUnion C = Full_set ->
           exists C':Family X,
             Finite C' /\\ Included C' C /\\
-            FamilyUnion C' = Full_set.",
+            FamilyUnion C' = Full_set. ",
         );
         println!("{:?}", tokens);
     }

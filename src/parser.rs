@@ -13,9 +13,11 @@ enum ParserError {
 impl Display for ParserError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ParserError::Eof => write!(f, "EOF"),
-            ParserError::UnexpectedToken(token) => write!(f, "unexpected token {}", token),
-            ParserError::UnexpectedQuery => write!(f, "unexpected query"),
+            ParserError::Eof => write!(f, "ParserError: EOF"),
+            ParserError::UnexpectedToken(token) => {
+                write!(f, "ParserError: unexpected token {}", token)
+            }
+            ParserError::UnexpectedQuery => write!(f, "ParserError: unexpected query"),
         }
     }
 }
@@ -34,7 +36,7 @@ impl Display for SimpleBinder {
 #[derive(Debug, PartialEq)]
 struct ExplicitBinder {
     names: Vec<String>,
-    term: Box<Type>,
+    typ: Box<Term>,
 }
 
 impl Display for ExplicitBinder {
@@ -43,14 +45,14 @@ impl Display for ExplicitBinder {
         for name in &self.names {
             write!(f, "{} ", name)?;
         }
-        write!(f, ": {})", *self.term)
+        write!(f, ": {})", *self.typ)
     }
 }
 
 #[derive(Debug, PartialEq)]
 struct ImplicitBinder {
     names: Vec<String>,
-    term: Option<Box<Type>>,
+    typ: Option<Box<Term>>,
 }
 
 impl Display for ImplicitBinder {
@@ -60,8 +62,8 @@ impl Display for ImplicitBinder {
             write!(f, "{} ", self.names[i])?;
         }
         write!(f, "{}", self.names[self.names.len() - 1])?;
-        if let Some(term) = &self.term {
-            write!(f, " : {}", *term)?;
+        if let Some(typ) = &self.typ {
+            write!(f, " : {}", *typ)?;
         }
         write!(f, "}}")
     }
@@ -87,7 +89,7 @@ impl Display for Binder {
 #[derive(Debug, PartialEq)]
 struct OpenBinder {
     names: Vec<String>,
-    term: Box<Type>,
+    typ: Box<Term>,
 }
 
 impl Display for OpenBinder {
@@ -95,7 +97,7 @@ impl Display for OpenBinder {
         for name in &self.names {
             write!(f, "{} ", name)?;
         }
-        write!(f, ": {}", *self.term)
+        write!(f, ": {}", *self.typ)
     }
 }
 
@@ -129,40 +131,10 @@ impl Display for OpenBinders {
 }
 
 #[derive(Debug, PartialEq)]
-enum QuantifierToken {
-    ForAll,
-    Exists,
-}
-
-impl Display for QuantifierToken {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            QuantifierToken::ForAll => write!(f, "forall"),
-            QuantifierToken::Exists => write!(f, "exists"),
-        }
-    }
-}
-
-impl TryFrom<&CoqToken> for QuantifierToken {
-    type Error = anyhow::Error;
-
-    fn try_from(value: &CoqToken) -> std::result::Result<Self, Self::Error> {
-        match &value.kind {
-            CoqTokenKind::Word(word) => match word.as_str() {
-                "forall" => Ok(QuantifierToken::ForAll),
-                "exists" => Ok(QuantifierToken::Exists),
-                _ => bail!(ParserError::UnexpectedToken(value.clone())),
-            },
-            _ => bail!(ParserError::UnexpectedToken(value.clone())),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq)]
 struct Quantifier {
-    token: QuantifierToken,
+    token: String,
     binder: Box<OpenBinders>,
-    has: Box<Type>,
+    has: Box<Term>,
 }
 
 impl Display for Quantifier {
@@ -172,85 +144,70 @@ impl Display for Quantifier {
 }
 
 #[derive(Debug, PartialEq)]
-struct Fun {
-    from: Box<Type>,
-    to: Box<Type>,
+struct FunType {
+    from: Box<Term>,
+    to: Box<Term>,
 }
 
-impl Display for Fun {
+impl Display for FunType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} -> {}", *self.from, *self.to)
     }
 }
 
+static WITH: &str = "with";
+
+static END: &str = "end";
+
 #[derive(Debug, PartialEq)]
-enum Type {
+struct MatchCase {
+    pattern: Box<Term>,
+    term: Box<Term>,
+}
+
+#[derive(Debug, PartialEq)]
+struct Match {
+    input: Box<Term>,
+    cases: Vec<MatchCase>,
+}
+
+impl Display for Match {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "match {} with\n", self.input)?;
+        for case in &self.cases {
+            write!(f, "| {} => {}", case.pattern, case.term)?;
+        }
+        std::fmt::Result::Ok(())
+    }
+}
+
+#[derive(Debug, PartialEq)]
+enum Term {
     Quantifier(Quantifier),
-    Fun(Fun),
+    FunType(FunType),
+    Match(Match),
+    Fixpoint(Fixpoint),
     Custom(Vec<CoqToken>),
 }
 
-impl Display for Type {
+impl Display for Term {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Type::Quantifier(term) => write!(f, "{}", term),
-            Type::Fun(term) => write!(f, "{}", term),
-            Type::Custom(tokens) => write!(f, "{}", CoqTokenSlice::from(tokens.as_slice())),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq)]
-enum TheoremToken {
-    Theorem,
-    Lemma,
-    Fact,
-    Remark,
-    Corollary,
-    Proposition,
-    Property,
-}
-
-impl TryFrom<&CoqToken> for TheoremToken {
-    type Error = anyhow::Error;
-
-    fn try_from(value: &CoqToken) -> std::result::Result<Self, Self::Error> {
-        match &value.kind {
-            CoqTokenKind::Word(word) => match word.as_str() {
-                "Theorem" => Ok(TheoremToken::Theorem),
-                "Lemma" => Ok(TheoremToken::Lemma),
-                "Fact" => Ok(TheoremToken::Fact),
-                "Remark" => Ok(TheoremToken::Remark),
-                "Corollary" => Ok(TheoremToken::Corollary),
-                "Proposition" => Ok(TheoremToken::Proposition),
-                "Property" => Ok(TheoremToken::Property),
-                _ => bail!(ParserError::UnexpectedToken(value.clone())),
-            },
-            _ => bail!(ParserError::UnexpectedToken(value.clone())),
-        }
-    }
-}
-
-impl Display for TheoremToken {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match *self {
-            TheoremToken::Theorem => write!(f, "Theorem"),
-            TheoremToken::Lemma => write!(f, "Lemma"),
-            TheoremToken::Fact => write!(f, "Fact"),
-            TheoremToken::Remark => write!(f, "Remark"),
-            TheoremToken::Corollary => write!(f, "Corollary"),
-            TheoremToken::Proposition => write!(f, "Proposition"),
-            TheoremToken::Property => write!(f, "Property"),
+            Term::Quantifier(typ) => write!(f, "{}", typ),
+            Term::FunType(typ) => write!(f, "{}", typ),
+            Term::Match(mat) => write!(f, "{}", mat),
+            Term::Fixpoint(fix) => write!(f, "{}", fix),
+            Term::Custom(tokens) => write!(f, "{}", CoqTokenSlice::from(tokens.as_slice())),
         }
     }
 }
 
 #[derive(Debug, PartialEq)]
 pub struct Theorem {
-    token: TheoremToken,
+    token: String,
     name: String,
     binders: Vec<Binder>,
-    term: Box<Type>,
+    typ: Box<Term>,
 }
 
 impl Display for Theorem {
@@ -259,7 +216,7 @@ impl Display for Theorem {
         for binder in &self.binders {
             write!(f, " {}", binder)?;
         }
-        write!(f, " : {}", self.term)
+        write!(f, " : {}", self.typ)
     }
 }
 
@@ -267,7 +224,7 @@ impl Display for Theorem {
 struct Constructor {
     name: String,
     binders: Vec<Binder>,
-    term: Option<Box<Type>>,
+    typ: Option<Box<Term>>,
 }
 
 impl Display for Constructor {
@@ -276,8 +233,8 @@ impl Display for Constructor {
         for binder in &self.binders {
             write!(f, " {}", binder)?;
         }
-        if let Some(term) = &self.term {
-            write!(f, " : {}", term)?;
+        if let Some(typ) = &self.typ {
+            write!(f, " : {}", typ)?;
         }
         std::fmt::Result::Ok(())
     }
@@ -287,7 +244,7 @@ impl Display for Constructor {
 pub struct Inductive {
     pub name: String,
     binders: Vec<Binder>,
-    term: Box<Type>,
+    typ: Box<Term>,
     constructors: Vec<Constructor>,
 }
 
@@ -297,7 +254,7 @@ impl Display for Inductive {
         for binder in &self.binders {
             write!(f, " {}", binder)?;
         }
-        write!(f, " : {} := ", self.term)?;
+        write!(f, " : {} := ", self.typ)?;
         for i in 0..self.constructors.len() - 1 {
             write!(f, "{} |", self.constructors[i])?;
         }
@@ -306,42 +263,12 @@ impl Display for Inductive {
 }
 
 #[derive(Debug, PartialEq)]
-enum DefinitionToken {
-    Definition,
-    Example,
-}
-
-impl Display for DefinitionToken {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self {
-            DefinitionToken::Definition => write!(f, "Definition"),
-            DefinitionToken::Example => write!(f, "Example"),
-        }
-    }
-}
-
-impl TryFrom<&CoqToken> for DefinitionToken {
-    type Error = anyhow::Error;
-
-    fn try_from(value: &CoqToken) -> std::result::Result<Self, Self::Error> {
-        match &value.kind {
-            CoqTokenKind::Word(word) => match word.as_str() {
-                "Definition" => Ok(DefinitionToken::Definition),
-                "Example" => Ok(DefinitionToken::Example),
-                _ => bail!(ParserError::UnexpectedToken(value.clone())),
-            },
-            _ => bail!(ParserError::UnexpectedToken(value.clone())),
-        }
-    }
-}
-
-#[derive(Debug, PartialEq)]
 pub struct Definition {
-    token: DefinitionToken,
+    token: String,
     pub name: String,
     binders: Vec<Binder>,
-    sort: Option<Box<Type>>,
-    term: Box<Type>,
+    sort: Option<Box<Term>>,
+    typ: Box<Term>,
 }
 
 impl Display for Definition {
@@ -353,26 +280,77 @@ impl Display for Definition {
         if let Some(sort) = &self.sort {
             write!(f, " : {}", sort)?;
         }
+        write!(f, " := {}", self.typ)
+    }
+}
+
+static STRUCT: &str = "struct";
+
+#[derive(Debug, PartialEq)]
+struct FixAnnotation {
+    name: String,
+}
+
+impl Display for FixAnnotation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{{struct {}}}", self.name)
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Fixpoint {
+    name: String,
+    binders: Vec<Binder>,
+    annotation: Option<FixAnnotation>,
+    typ: Option<Box<Term>>,
+    term: Box<Term>,
+}
+
+impl Display for Fixpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Fixpoint {}", self.name)?;
+        for binder in &self.binders {
+            write!(f, " {}", binder)?;
+        }
+        if let Some(annotation) = &self.annotation {
+            write!(f, " {}", annotation)?;
+        }
+        if let Some(typ) = &self.typ {
+            write!(f, " : {}", typ)?;
+        }
         write!(f, " := {}", self.term)
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct PrintVariable {
+    name: String,
+    term: Box<Term>,
+    typ: Box<Term>,
+}
+
+impl Display for PrintVariable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} = {} : {}", self.name, self.term, self.typ)
     }
 }
 
 #[derive(Debug, PartialEq)]
 struct Hypothesis {
     name: String,
-    term: Box<Type>,
+    typ: Box<Term>,
 }
 
 impl Display for Hypothesis {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} : {}", self.name, self.term)
+        write!(f, "{} : {}", self.name, self.typ)
     }
 }
 
 #[derive(Debug, PartialEq)]
 pub struct Goal {
     premise: Vec<Hypothesis>,
-    conclusion: Box<Type>,
+    conclusion: Box<Term>,
 }
 
 impl Display for Goal {
@@ -390,6 +368,9 @@ pub enum CoqExpression {
     Theorem(Theorem),
     Inductive(Inductive),
     Definition(Definition),
+    Fixpoint(Fixpoint),
+    PrintVariable(PrintVariable),
+    Tactic(Vec<CoqToken>),
     Goal(Vec<Goal>),
     SectionStart(String),
     SectionEnd(String),
@@ -403,6 +384,9 @@ impl Display for CoqExpression {
             CoqExpression::Theorem(theorem) => write!(f, "{}", theorem),
             CoqExpression::Inductive(inductive) => write!(f, "{}", inductive),
             CoqExpression::Definition(definition) => write!(f, "{}", definition),
+            CoqExpression::Fixpoint(fixpoint) => write!(f, "{}", fixpoint),
+            CoqExpression::PrintVariable(variable) => write!(f, "{}", variable),
+            CoqExpression::Tactic(tactic) => write!(f, "{}", CoqTokenSlice::from(tactic.as_slice())),
             CoqExpression::Goal(goals) => {
                 write!(
                     f,
@@ -440,6 +424,13 @@ impl<'a> CoqParser<'a> {
         Ok(&self.slice[self.index])
     }
 
+    fn peek(&self) -> Result<&CoqToken> {
+        if self.index + 1 >= self.slice.len() {
+            bail!(ParserError::Eof);
+        }
+        Ok(&self.slice[self.index + 1])
+    }
+
     fn advance(&mut self) {
         self.index += 1;
     }
@@ -452,33 +443,58 @@ impl<'a> CoqParser<'a> {
         self.advance();
     }
 
-    /// parses type and puts carret on next token
-    fn parse_type(&mut self, pred: fn(&CoqTokenKind) -> bool) -> Result<Box<Type>> {
-        if let CoqTokenKind::Word(word) = &self.current()?.kind {
-            if let std::result::Result::Ok(token) = QuantifierToken::try_from(self.current()?) {
-                self.advance();
-                let binder = Box::new(self.parse_open_binder()?);
-                self.advance();
-                return Ok(Box::new(Type::Quantifier(Quantifier {
-                    token,
-                    binder,
-                    has: self.parse_type(pred)?,
-                })));
+    /// parses term and puts carret on next token
+    fn parse_term(&mut self, pred: fn(&CoqTokenKind) -> bool) -> Result<Box<Term>> {
+        let kind = self.current()?.kind.clone();
+        if let CoqTokenKind::Word(word) = kind {
+            match word.as_str() {
+                "forall" | "exists" => {
+                    self.advance();
+                    let binder = Box::new(self.parse_open_binder()?);
+                    self.advance();
+                    return Ok(Box::new(Term::Quantifier(Quantifier {
+                        token: word,
+                        binder,
+                        has: self.parse_term(pred)?,
+                    })));
+                }
+                "match" => {
+                    self.advance();
+                    let input =
+                        self.parse_term(|token| token == &CoqTokenKind::Word(WITH.to_string()))?;
+                    self.advance();
+
+                    let mut cases = Vec::new();
+                    while &self.current()?.kind == &CoqTokenKind::Pipe {
+                        self.advance();
+                        let pattern = self.parse_term(|token| token == &CoqTokenKind::Case)?;
+                        self.advance();
+                        let term = self.parse_term(|token| {
+                            token == &CoqTokenKind::Pipe
+                                || token == &CoqTokenKind::Word(END.to_string())
+                        })?;
+                        cases.push(MatchCase { pattern, term });
+                    }
+                    self.advance();
+                    return Ok(Box::new(Term::Match(Match { input, cases })));
+                }
+                "fix" => return Ok(Box::new(Term::Fixpoint(self.parse_fixpoint(pred)?))),
+                _ => {}
             }
         }
 
         if let CoqTokenKind::BracketLeft = &self.current()?.kind {
             self.advance();
-            let term = self.parse_type(|kind| &CoqTokenKind::BracketRight == kind)?;
+            let term = self.parse_term(|kind| &CoqTokenKind::BracketRight == kind)?;
             self.advance();
 
             if pred(&self.current()?.kind) {
                 return Ok(term);
             } else if CoqTokenKind::Arrow == self.current()?.kind {
                 self.advance();
-                return Ok(Box::new(Type::Fun(Fun {
+                return Ok(Box::new(Term::FunType(FunType {
                     from: term,
-                    to: self.parse_type(pred)?,
+                    to: self.parse_term(pred)?,
                 })));
             }
             bail!(ParserError::UnexpectedToken(self.current()?.clone()))
@@ -488,14 +504,14 @@ impl<'a> CoqParser<'a> {
         loop {
             let token = self.current()?;
             if CoqTokenKind::Arrow == token.kind {
-                let from = Box::new(Type::Custom(tokens));
+                let from = Box::new(Term::Custom(tokens));
                 self.advance();
-                return Ok(Box::new(Type::Fun(Fun {
+                return Ok(Box::new(Term::FunType(FunType {
                     from,
-                    to: self.parse_type(pred)?,
+                    to: self.parse_term(pred)?,
                 })));
             } else if pred(&token.kind) {
-                return Ok(Box::new(Type::Custom(tokens)));
+                return Ok(Box::new(Term::Custom(tokens)));
             }
             tokens.push(token.clone());
             self.advance();
@@ -503,11 +519,11 @@ impl<'a> CoqParser<'a> {
     }
 
     fn parse_name(&mut self) -> Result<String> {
-        let token = self.current()?;
-        if let CoqTokenKind::Word(name) = &token.kind {
-            Ok(name.clone())
-        } else {
-            bail!(ParserError::UnexpectedToken(token.clone()));
+        let token = self.current()?.clone();
+        match token.kind {
+            CoqTokenKind::Word(name) => Ok(name),
+            CoqTokenKind::Underscore => Ok("_".to_string()),
+            _ => bail!(ParserError::UnexpectedToken(token.clone())),
         }
     }
 
@@ -525,10 +541,10 @@ impl<'a> CoqParser<'a> {
                 }
 
                 self.advance();
-                let term = self.parse_type(|token| &CoqTokenKind::BracketRight == token)?;
+                let typ = self.parse_term(|token| &CoqTokenKind::BracketRight == token)?;
 
                 self.advance();
-                Ok(Binder::Explicit(ExplicitBinder { names, term }))
+                Ok(Binder::Explicit(ExplicitBinder { names, typ }))
             }
             CoqTokenKind::BracketCurlyLeft => {
                 let mut seen_colon = false;
@@ -546,16 +562,16 @@ impl<'a> CoqParser<'a> {
                 }
 
                 self.advance();
-                let term = if seen_colon {
+                let typ = if seen_colon {
                     let term =
-                        self.parse_type(|token| &CoqTokenKind::BracketCurlyRight == token)?;
+                        self.parse_term(|token| &CoqTokenKind::BracketCurlyRight == token)?;
                     self.advance();
                     Some(term)
                 } else {
                     None
                 };
 
-                Ok(Binder::Implicit(ImplicitBinder { names, term }))
+                Ok(Binder::Implicit(ImplicitBinder { names, typ }))
             }
             _ => bail!(ParserError::UnexpectedToken(self.current()?.clone())),
         }
@@ -563,18 +579,22 @@ impl<'a> CoqParser<'a> {
 
     fn parse_open_binder(&mut self) -> Result<OpenBinders> {
         let mut names = Vec::new();
-        while let CoqTokenKind::Word(_) = &self.current()?.kind {
-            let name = self.parse_name()?;
-            self.advance();
-            names.push(name);
+        loop {
+            match self.parse_name() {
+                std::result::Result::Ok(name) => {
+                    names.push(name);
+                    self.advance();
+                }
+                _ => break,
+            };
         }
 
         //  we suppose that open_binders are used only as:
         //      forall (open_binders), (type)
         if CoqTokenKind::Colon == self.current()?.kind {
             self.advance();
-            let term = self.parse_type(|token| &CoqTokenKind::Comma == token)?;
-            Ok(OpenBinders::OpenBinder(OpenBinder { names, term }))
+            let typ = self.parse_term(|token| &CoqTokenKind::Comma == token)?;
+            Ok(OpenBinders::OpenBinder(OpenBinder { names, typ }))
         } else {
             let binders = if names.is_empty() {
                 let mut binders = Vec::new();
@@ -592,7 +612,7 @@ impl<'a> CoqParser<'a> {
         }
     }
 
-    fn parse_theorem(&mut self, token: TheoremToken) -> Result<Theorem> {
+    fn parse_theorem(&mut self, token: String) -> Result<Theorem> {
         self.advance();
         let kind = self.current()?.kind.clone();
         if let CoqTokenKind::Word(name) = kind {
@@ -607,14 +627,13 @@ impl<'a> CoqParser<'a> {
                 token,
                 binders,
                 name,
-                term: self.parse_type(|token| &CoqTokenKind::Dot == token)?,
+                typ: self.parse_term(|token| &CoqTokenKind::Dot == token)?,
             });
         }
         bail!(ParserError::UnexpectedToken(self.current()?.clone()));
     }
 
     fn parse_constructor(&mut self) -> Result<Constructor> {
-        self.advance();
         let kind = self.current()?.kind.clone();
         if let CoqTokenKind::Word(name) = kind {
             self.advance();
@@ -625,21 +644,17 @@ impl<'a> CoqParser<'a> {
 
             let pred =
                 |token: &CoqTokenKind| &CoqTokenKind::Dot == token || &CoqTokenKind::Pipe == token;
-            let term = if pred(&self.current()?.kind) {
+            let typ = if pred(&self.current()?.kind) {
                 None
             } else {
                 if CoqTokenKind::Colon != self.current()?.kind {
                     bail!(ParserError::UnexpectedToken(self.current()?.clone()));
                 }
                 self.advance();
-                Some(self.parse_type(pred)?)
+                Some(self.parse_term(pred)?)
             };
 
-            return Ok(Constructor {
-                name,
-                binders,
-                term,
-            });
+            return Ok(Constructor { name, binders, typ });
         }
         bail!(ParserError::UnexpectedToken(self.current()?.clone()));
     }
@@ -655,7 +670,7 @@ impl<'a> CoqParser<'a> {
             }
 
             self.advance();
-            let term = self.parse_type(|token| &CoqTokenKind::Define == token)?;
+            let typ = self.parse_term(|token| &CoqTokenKind::Define == token)?;
             self.advance();
 
             let mut constructors = Vec::new();
@@ -669,14 +684,14 @@ impl<'a> CoqParser<'a> {
             return Ok(Inductive {
                 name,
                 binders,
-                term,
+                typ,
                 constructors,
             });
         }
         bail!(ParserError::UnexpectedToken(self.current()?.clone()));
     }
 
-    fn parse_definition(&mut self, token: DefinitionToken) -> Result<Definition> {
+    fn parse_definition(&mut self, token: String) -> Result<Definition> {
         self.advance();
         let kind = self.current()?.kind.clone();
         if let CoqTokenKind::Word(name) = kind {
@@ -691,23 +706,83 @@ impl<'a> CoqParser<'a> {
 
             let sort = if self.current()?.kind == CoqTokenKind::Colon {
                 self.advance();
-                Some(self.parse_type(|token| token == &CoqTokenKind::Define)?)
+                Some(self.parse_term(|token| token == &CoqTokenKind::Define)?)
             } else {
                 None
             };
 
             self.advance();
-            let term = self.parse_type(|token| token == &CoqTokenKind::Dot)?;
+            let typ = self.parse_term(|token| token == &CoqTokenKind::Dot)?;
 
             return Ok(Definition {
                 token,
                 name,
                 binders,
                 sort,
-                term,
+                typ,
             });
         }
         bail!(ParserError::UnexpectedToken(self.current()?.clone()));
+    }
+
+    fn parse_fixpoint_annotation(&mut self) -> Result<FixAnnotation> {
+        self.advance();
+        self.advance();
+        let name = self.parse_name()?;
+        self.advance();
+        self.advance();
+        Ok(FixAnnotation { name })
+    }
+
+    fn parse_fixpoint(&mut self, pred: fn(&CoqTokenKind) -> bool) -> Result<Fixpoint> {
+        self.advance();
+        let kind = self.current()?.kind.clone();
+        if let CoqTokenKind::Word(name) = kind {
+            self.advance();
+            let mut binders = Vec::new();
+            let mut annotation = None;
+            let mut typ = None;
+
+            loop {
+                let mut stop = false;
+                if self.current()?.kind == CoqTokenKind::BracketCurlyLeft
+                    && self.peek()?.kind == CoqTokenKind::Word(STRUCT.to_string())
+                {
+                    annotation = Some(self.parse_fixpoint_annotation()?);
+                    stop = true;
+                }
+                if self.current()?.kind == CoqTokenKind::Colon {
+                    self.advance();
+                    typ = Some(self.parse_term(|token| token == &CoqTokenKind::Define)?);
+                    stop = true;
+                }
+                if stop {
+                    break;
+                }
+                binders.push(self.parse_binder()?);
+            }
+
+            self.advance();
+            return Ok(Fixpoint {
+                name,
+                binders,
+                annotation,
+                typ,
+                term: self.parse_term(pred)?,
+            });
+        }
+        bail!(ParserError::UnexpectedToken(self.current()?.clone()));
+    }
+
+    fn parse_print_variable(&mut self, name: String) -> Result<PrintVariable> {
+        self.advance();
+        self.advance();
+        let term = self.parse_term(|token| token == &CoqTokenKind::Colon)?;
+        self.advance();
+        let typ = self.parse_term(|token| {
+            token == &CoqTokenKind::NewLine || token == &CoqTokenKind::Word("Arguments".to_string())
+        })?;
+        Ok(PrintVariable { name, term, typ })
     }
 
     fn parse_hypothesis(&mut self) -> Result<Hypothesis> {
@@ -715,20 +790,20 @@ impl<'a> CoqParser<'a> {
         if let CoqTokenKind::Word(name) = kind {
             self.advance();
             self.advance();
-            let term = self.parse_type(|token| token == &CoqTokenKind::NewLine)?;
+            let typ = self.parse_term(|token| token == &CoqTokenKind::NewLine)?;
             self.advance();
-            return Ok(Hypothesis { name, term });
+            return Ok(Hypothesis { name, typ });
         }
         bail!(ParserError::UnexpectedToken(self.current()?.clone()));
     }
 
     fn parse_goal(&mut self) -> Result<Goal> {
         let mut premise = Vec::new();
-        while (self.current()?.kind != CoqTokenKind::Eq) {
+        while self.current()?.kind != CoqTokenKind::Eq {
             premise.push(self.parse_hypothesis()?);
         }
         self.skip_line();
-        let conclusion = self.parse_type(|token| token == &CoqTokenKind::NewLine)?;
+        let conclusion = self.parse_term(|token| token == &CoqTokenKind::NewLine)?;
         self.advance();
         Ok(Goal {
             premise,
@@ -743,7 +818,7 @@ impl<'a> CoqParser<'a> {
 
         for _ in 1..number {
             self.skip_line();
-            let conclusion = self.parse_type(|token| token == &CoqTokenKind::NewLine)?;
+            let conclusion = self.parse_term(|token| token == &CoqTokenKind::NewLine)?;
             self.advance();
             goals.push(Goal {
                 premise: Vec::new(),
@@ -755,34 +830,51 @@ impl<'a> CoqParser<'a> {
     }
 
     fn parse_expression(&mut self) -> Result<CoqExpression> {
-        let token = self.current()?;
-        if let CoqTokenKind::Word(word) = &token.kind {
-            if let std::result::Result::Ok(token) = TheoremToken::try_from(token) {
-                return Ok(CoqExpression::Theorem(self.parse_theorem(token)?));
-            }
-            if let std::result::Result::Ok(token) = DefinitionToken::try_from(token) {
-                return Ok(CoqExpression::Definition(self.parse_definition(token)?));
-            }
+        let token = self.current()?.clone();
+        if let CoqTokenKind::Word(word) = token.kind {
             if let std::result::Result::Ok(number) = word.parse::<usize>() {
                 return Ok(CoqExpression::Goal(self.parse_goals(number)?));
             }
-            match word.as_str() {
-                "Inductive" => return Ok(CoqExpression::Inductive(self.parse_inductive()?)),
+            return match word.as_str() {
+                "Theorem" | "Lemma" | "Fact" | "Remark" | "Corollary" | "Proposition"
+                | "Property" => Ok(CoqExpression::Theorem(self.parse_theorem(word)?)),
+                "Inductive" => Ok(CoqExpression::Inductive(self.parse_inductive()?)),
+                "Definition" | "Example" => {
+                    Ok(CoqExpression::Definition(self.parse_definition(word)?))
+                }
+                "Fixpoint" => Ok(CoqExpression::Fixpoint(
+                    self.parse_fixpoint(|token| token == &CoqTokenKind::Dot)?,
+                )),
                 "Section" => {
                     self.advance();
-                    return Ok(CoqExpression::SectionStart(self.parse_name()?));
+                    Ok(CoqExpression::SectionStart(self.parse_name()?))
                 }
                 "End" => {
                     self.advance();
-                    return Ok(CoqExpression::SectionEnd(self.parse_name()?));
+                    Ok(CoqExpression::SectionEnd(self.parse_name()?))
                 }
                 "Proof" => Ok(CoqExpression::Proof),
                 "Qed" => Ok(CoqExpression::Qed),
-                _ => bail!(ParserError::UnexpectedQuery),
-            }?;
+                _ => {
+                    if let std::result::Result::Ok(token) = self.peek(){
+                        if token.kind == CoqTokenKind::Eq {
+                            Ok(CoqExpression::PrintVariable(self.parse_print_variable(word)?))
+                        } else {
+                            Ok(CoqExpression::Tactic(self.slice.clone().into()))
+                        }
+                    } else {
+                        Ok(CoqExpression::Tactic(self.slice.clone().into()))
+                    }
+                }
+            };
         }
         bail!(ParserError::UnexpectedQuery);
     }
+}
+
+enum NameCollectorMode {
+    Seeing,
+    Registering,
 }
 
 /// Collector for gathering names within Coq expressions
@@ -791,6 +883,7 @@ struct NameCollector {
     seen: HashSet<String>,
     register: Vec<String>,
     bottom: Vec<usize>,
+    mode: NameCollectorMode,
 }
 
 impl NameCollector {
@@ -800,6 +893,7 @@ impl NameCollector {
             seen: HashSet::new(),
             register: Vec::new(),
             bottom: Vec::new(),
+            mode: NameCollectorMode::Seeing,
         }
     }
 
@@ -840,14 +934,14 @@ impl NameCollector {
                 for name in &explicit.names {
                     self.register(name);
                 }
-                self.get_type_names(&explicit.term);
+                self.get_term_names(&explicit.typ);
             }
             Binder::Implicit(implicit) => {
                 for name in &implicit.names {
                     self.register(name);
                 }
-                if let Some(term) = &implicit.term {
-                    self.get_type_names(term);
+                if let Some(term) = &implicit.typ {
+                    self.get_term_names(term);
                 }
             }
             Binder::Simple(simple) => self.register(&simple.name),
@@ -864,31 +958,55 @@ impl NameCollector {
             OpenBinders::OpenBinder(binder) => {
                 for name in &binder.names {
                     self.register(name);
-                    self.get_type_names(&binder.term);
+                    self.get_term_names(&binder.typ);
                 }
             }
         }
     }
 
-    fn get_type_names(&mut self, term: &Box<Type>) {
+    fn get_term_names(&mut self, term: &Box<Term>) {
         match &**term {
-            Type::Quantifier(forall) => {
+            Term::Quantifier(forall) => {
                 self.open();
                 self.get_open_binders_names(&forall.binder);
-                self.get_type_names(&forall.has);
+                self.get_term_names(&forall.has);
                 self.close();
             }
-            Type::Fun(fun) => {
-                self.get_type_names(&fun.from);
-                self.get_type_names(&fun.to);
+            Term::FunType(fun) => {
+                self.get_term_names(&fun.from);
+                self.get_term_names(&fun.to);
             }
-            Type::Custom(tokens) => {
+            Term::Match(mat) => {
+                self.open();
+                self.mode = NameCollectorMode::Registering;
+                self.get_term_names(&mat.input);
+                self.mode = NameCollectorMode::Seeing;
+
+                for case in &mat.cases {
+                    // ISSUE - 1
+                    // consider pattern | S n' => ...
+                    // currently it is out of our capabilities to understand
+                    // that S is a function and n' is a free variable
+
+                    self.mode = NameCollectorMode::Registering;
+                    self.get_term_names(&case.pattern);
+                    self.mode = NameCollectorMode::Seeing;
+
+                    self.get_term_names(&case.term);
+                }
+                self.close();
+            }
+            Term::Custom(tokens) => {
                 for token in tokens {
                     if let CoqTokenKind::Word(word) = &token.kind {
-                        self.see(word);
+                        match self.mode {
+                            NameCollectorMode::Seeing => self.see(word),
+                            NameCollectorMode::Registering => self.register(word),
+                        };
                     }
                 }
             }
+            Term::Fixpoint(fixpoint) => self.get_fixpoint_names(fixpoint),
         }
     }
 
@@ -897,7 +1015,7 @@ impl NameCollector {
         for binder in &theorem.binders {
             self.get_binder_names(binder);
         }
-        self.get_type_names(&theorem.term);
+        self.get_term_names(&theorem.typ);
         self.close();
     }
 
@@ -906,8 +1024,8 @@ impl NameCollector {
         for binder in &constructor.binders {
             self.get_binder_names(binder);
         }
-        if let Some(term) = &constructor.term {
-            self.get_type_names(term);
+        if let Some(term) = &constructor.typ {
+            self.get_term_names(term);
         }
         self.close();
     }
@@ -917,7 +1035,7 @@ impl NameCollector {
         for binder in &inductive.binders {
             self.get_binder_names(binder);
         }
-        self.get_type_names(&inductive.term);
+        self.get_term_names(&inductive.typ);
         for constructor in &inductive.constructors {
             self.get_constructor_names(constructor);
         }
@@ -929,7 +1047,27 @@ impl NameCollector {
         for binder in &definition.binders {
             self.get_binder_names(binder);
         }
-        self.get_type_names(&definition.term);
+        self.get_term_names(&definition.typ);
+        self.close();
+    }
+
+    fn get_fixpoint_names(&mut self, fixpoint: &Fixpoint) {
+        self.open();
+        self.register(&fixpoint.name);
+        for binder in &fixpoint.binders {
+            self.get_binder_names(binder);
+        }
+        if let Some(typ) = &fixpoint.typ {
+            self.get_term_names(typ);
+        }
+        self.get_term_names(&fixpoint.term);
+        self.close();
+    }
+
+    fn get_print_variable_names(&mut self, variable: &PrintVariable) {
+        self.open();
+        self.get_term_names(&variable.term);
+        self.get_term_names(&variable.typ);
         self.close();
     }
 
@@ -937,9 +1075,9 @@ impl NameCollector {
         self.open();
         for hypothesis in &goal.premise {
             self.register(&hypothesis.name);
-            self.get_type_names(&hypothesis.term);
+            self.get_term_names(&hypothesis.typ);
         }
-        self.get_type_names(&goal.conclusion);
+        self.get_term_names(&goal.conclusion);
         self.close();
     }
 
@@ -948,6 +1086,8 @@ impl NameCollector {
             CoqExpression::Theorem(theorem) => self.get_theorem_names(theorem),
             CoqExpression::Inductive(inductive) => self.get_inductive_names(inductive),
             CoqExpression::Definition(definition) => self.get_definition_names(definition),
+            CoqExpression::Fixpoint(fixpoint) => self.get_fixpoint_names(fixpoint),
+            CoqExpression::PrintVariable(variable) => self.get_print_variable_names(variable),
             CoqExpression::Goal(goals) => {
                 for goal in goals {
                     self.get_goal_names(goal);
@@ -972,12 +1112,13 @@ pub fn get_names(expression: &CoqExpression) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        lexer::{tokenize, CoqTokenSlice},
+        lexer::{tokenize, CoqToken, CoqTokenKind, CoqTokenSlice},
         parser::{CoqParser, NameCollector},
     };
 
     fn check(data: &str) {
-        let tokens = tokenize(data);
+        let mut tokens = tokenize(data).unwrap();
+        tokens.push(CoqToken::new(CoqTokenKind::NewLine, 0, 0));
         println!("{:?}", tokens);
 
         let mut parser = CoqParser::new(CoqTokenSlice::from(tokens.as_slice()));
@@ -1004,12 +1145,31 @@ mod tests {
     }
 
     #[test]
+    fn inductive_nat_complete() {
+        check(
+            "Inductive nat : Set :=  O : nat | S : nat -> nat.
+                    Arguments S _%nat_scope",
+        )
+    }
+
+    #[test]
     fn inductive_le() {
         check("Inductive le (n : nat) : nat -> Prop := le_n : n <= n | le_S : forall m : nat, n <= m -> n <= Datatypes.S m.");
     }
 
     #[test]
-    fn compact() {
+    fn inductive_eq() {
+        check(
+            "Inductive eq (A : Type) (x : A) : forall _ : A, Prop :=  eq_refl : eq x x.
+
+        Arguments eq {A}%type_scope x _
+        Arguments eq_refl {A}%type_scope {x}, [_] _
+        ",
+        );
+    }
+
+    #[test]
+    fn definition_compact() {
         check(
             "Definition compact (X:TopologicalSpace) :=
         forall C:Family X,
@@ -1022,11 +1182,35 @@ mod tests {
     }
 
     #[test]
+    fn fixpoint_factorial() {
+        check(
+            "Fixpoint factorial (n:nat) : nat :=
+                    match n with
+                    | O => S O
+                    | S n' => mult n (factorial n')
+                    end.",
+        );
+    }
+
+    #[test]
+    fn fixpoint_add_definition() {
+        check(
+            "Nat.add = 
+        fix add (n m : nat) {struct n} : nat :=
+          match n with
+          | 0 => m
+          | S p => S (add p m)
+          end
+             : forall (_ : nat) (_ : nat), nat",
+        );
+    }
+
+    #[test]
     fn goals() {
         check(
             "3 goals
   
-        X : Type
+        X : Term
         goal : eq 2 2
         ============================
         eq 1 1
