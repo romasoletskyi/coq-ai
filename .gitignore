@@ -1,0 +1,3 @@
+coq_parser/target
+dataset/
+.lia.cache
