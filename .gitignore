@@ -1,3 +1,4 @@
 coq_parser/target
+coq_parser/tests/topology
 dataset/
 .lia.cache

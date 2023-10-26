@@ -173,7 +173,7 @@ fn tokenize_word(data: &str) -> Result<(CoqTokenKind, usize)> {
     let (word, size) = take_while(data, |c, next| {
         if first {
             first = false;
-            c.is_alphanumeric() || c == '_'
+            c.is_alphanumeric() || c == '_' || c == '?' || c == '@'
         } else {
             let allow_dot = c == '.'
                 && if let Some(next) = next {
@@ -229,10 +229,11 @@ fn get_next_token(data: &str) -> Result<(CoqTokenKind, usize)> {
             _ => bail!(LexerError::UnexpectedSymbol),
         },
         '?' => {
-            if get_next_char(&mut it)?.is_whitespace() {
-                (CoqTokenKind::Question, 1)
-            } else {
+            let c = get_next_char(&mut it)?;
+            if c.is_alphanumeric() || c == '_' {
                 tokenize_word(data)?
+            } else {
+                (CoqTokenKind::Question, 1)
             }
         }
         '_' => match get_next_char(&mut it) {
@@ -401,6 +402,7 @@ impl<'a> CoqTokenizer<'a> {
     fn tokenize(&mut self) -> Result<Vec<CoqToken>> {
         let mut tokens = Vec::new();
         while let Some(token) = self.next()? {
+            println!("{}", token);
             tokens.push(token);
         }
         Ok(tokens)
