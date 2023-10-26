@@ -183,6 +183,8 @@ impl Display for IfTerm {
 
 static IN: &str = "in";
 
+static AS: &str = "as";
+
 #[derive(Debug, PartialEq)]
 struct BasicLetIn {
     name: String,
@@ -208,6 +210,7 @@ impl Display for BasicLetIn {
 #[derive(Debug, PartialEq)]
 struct DestructLetIn {
     names: Vec<String>,
+    ret: Option<(Option<String>, Box<Term>)>,
     destruct: Box<Term>,
     main: Box<Term>,
 }
@@ -218,7 +221,14 @@ impl Display for DestructLetIn {
         for i in 1..self.names.len() {
             write!(f, ", {}", self.names[i])?;
         }
-        write!(f, ") := {} in {}", self.destruct, self.main)
+        write!(f, ") ")?;
+        if let Some((as_name, ret_typ)) = &self.ret {
+            if let Some(name) = as_name {
+                write!(f, "as {} ", name)?;
+            }
+            write!(f, "return {} ", ret_typ)?;
+        }
+        write!(f, ":= {} in {}", self.destruct, self.main)
     }
 }
 
@@ -389,6 +399,98 @@ impl Display for Definition {
     }
 }
 
+#[derive(Debug, PartialEq)]
+struct FieldSpec {
+    binders: Vec<Binder>,
+    typ: Option<Box<Term>>,
+    term: Option<Box<Term>>
+}
+
+impl Display for FieldSpec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if !self.binders.is_empty() {
+            write!(f, "{}", self.binders[0])?;
+        }
+        for i in 1..self.binders.len() {
+            write!(f, " {}", self.binders[i])?;
+        }
+        if let Some(typ) = &self.typ {
+            write!(f, " {}", typ)?;
+        }
+        if let Some(term) = &self.term {
+            write!(f, " := {}", term)?;
+        }
+        std::fmt::Result::Ok(())
+    }
+}
+
+#[derive(Debug, PartialEq)]
+struct RecordField {
+    name: String,
+    spec: Option<FieldSpec>
+}
+
+impl Display for RecordField {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.name)?;
+        if let Some(spec) = &self.spec {
+            write!(f, " {}", spec)?;
+        }
+        std::fmt::Result::Ok(())
+    }
+}
+
+#[derive(Debug, PartialEq)]
+struct RecordBody {
+    name: Option<String>,
+    fields: Vec<RecordField>,
+    arg: Option<String>
+}
+
+impl Display for RecordBody {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if let Some(name) = &self.name {
+            write!(f, "{} {{", name)?;
+        }
+        if !self.fields.is_empty() {
+            write!(f, "{}", self.fields[0])?;
+        }
+        for i in 1..self.fields.len() {
+            write!(f, "; {}", self.fields[i])?;
+        }
+        write!(f, "}}")?;
+        if let Some(arg) = &self.arg {
+            write!(f, " as {}", arg)?;
+        }
+        std::fmt::Result::Ok(())
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub struct Record {
+    token: String,
+    name: String,
+    binders: Vec<Binder>,
+    sort: Option<Box<Term>>,
+    body: Option<RecordBody>
+}
+
+impl Display for Record {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} {}", self.token, self.name)?;
+        for binder in &self.binders {
+            write!(f, " {}", binder)?;
+        }
+        if let Some(sort) = &self.sort {
+            write!(f, " : {}", sort)?;
+        }
+        if let Some(body) = &self.body {
+            write!(f, " := {}", body)?;
+        }
+        std::fmt::Result::Ok(())
+    }
+}
+
 static STRUCT: &str = "struct";
 
 #[derive(Debug, PartialEq)]
@@ -473,6 +575,7 @@ pub enum CoqExpression {
     Theorem(Theorem),
     Inductive(Inductive),
     Definition(Definition),
+    Record(Record),
     Fixpoint(Fixpoint),
     PrintVariable(PrintVariable),
     Tactic(Vec<CoqToken>),
@@ -492,6 +595,7 @@ impl Display for CoqExpression {
             CoqExpression::Theorem(theorem) => write!(f, "{}", theorem),
             CoqExpression::Inductive(inductive) => write!(f, "{}", inductive),
             CoqExpression::Definition(definition) => write!(f, "{}", definition),
+            CoqExpression::Record(record) => write!(f, "{}", record),
             CoqExpression::Fixpoint(fixpoint) => write!(f, "{}", fixpoint),
             CoqExpression::PrintVariable(variable) => write!(f, "{}", variable),
             CoqExpression::Tactic(tactic) => {
@@ -546,14 +650,16 @@ impl<'a> CoqParser<'a> {
 
     fn advance(&mut self) {
         self.index += 1;
+        while self.index + 1 < self.slice.len() && self.slice[self.index].kind == CoqTokenKind::NewLine {
+            self.index += 1;
+        }
     }
 
     fn skip_line(&mut self) {
-        while self.slice[self.index].kind != CoqTokenKind::NewLine && self.index < self.slice.len()
-        {
-            self.advance();
+        while self.index < self.slice.len() && self.slice[self.index].kind != CoqTokenKind::NewLine {
+            self.index += 1;
         }
-        self.advance();
+        self.index += 1;
     }
 
     fn parse_basic_term(&mut self) -> Result<Box<BasicTerm>> {
@@ -659,12 +765,28 @@ impl<'a> CoqParser<'a> {
                             }
                         }
                         self.advance();
+                        let kind = self.current()?.kind.clone();
+                        let ret = if let CoqTokenKind::Word(word) = kind {
+                            let as_name = if &word == "as" {
+                                self.advance();
+                                let s = Some(self.parse_name()?);
+                                self.advance();
+                                s      
+                            } else {
+                                None
+                            };
+                            self.advance();
+                            Some((as_name, self.parse_term(|token| token == &CoqTokenKind::Define)?))
+                        } else {
+                            None
+                        };
                         self.advance();
                         let destruct =
                             self.parse_term(|token| token == &CoqTokenKind::Word(IN.to_string()))?;
                         self.advance();
                         return Ok(Box::new(Term::LetIn(LetIn::DestructLetIn(DestructLetIn {
                             names,
+                            ret,
                             destruct,
                             main: self.parse_term(stop)?,
                         }))));
@@ -753,7 +875,6 @@ impl<'a> CoqParser<'a> {
                 } else {
                     None
                 };
-
                 Ok(Binder::Implicit(ImplicitBinder { names, typ }))
             }
             _ => bail!(ParserError::UnexpectedToken(self.current()?.clone())),
@@ -901,6 +1022,100 @@ impl<'a> CoqParser<'a> {
         bail!(ParserError::UnexpectedToken(self.current()?.clone()));
     }
 
+    fn parse_field_spec(&mut self) -> Result<FieldSpec> {
+        let mut binders = Vec::new();
+        while self.current()?.kind != CoqTokenKind::Colon && self.current()?.kind != CoqTokenKind::Define {
+            binders.push(self.parse_binder()?);
+        }
+        let typ = if self.current()?.kind == CoqTokenKind::Colon {
+            self.advance();
+            Some(self.parse_term(|token| token == &CoqTokenKind::Define || token == &CoqTokenKind::SemiColon || token == &CoqTokenKind::BracketCurlyRight)?)
+        } else {
+            None
+        };
+        let term = if self.current()?.kind == CoqTokenKind::Define {
+            self.advance();
+            Some(self.parse_term(|token| token == &CoqTokenKind::SemiColon || token == &CoqTokenKind::BracketCurlyRight)?)
+        } else {
+            None
+        };
+        Ok(FieldSpec { binders, typ, term })
+    }
+
+    fn parse_record_field(&mut self) -> Result<RecordField> {
+        let name = self.parse_name()?;
+        self.advance();
+        let spec = if self.current()?.kind != CoqTokenKind::SemiColon && self.current()?.kind != CoqTokenKind::BracketCurlyRight {
+            Some(self.parse_field_spec()?)
+        } else {
+            None
+        };
+        Ok(RecordField { name, spec })
+    }
+
+    fn parse_record_body(&mut self) -> Result<RecordBody> {
+        let name = self.parse_name().ok();
+        if name.is_some() {
+            self.advance();
+        }
+        if self.current()?.kind != CoqTokenKind::BracketCurlyLeft {
+            bail!(ParserError::UnexpectedToken(self.current()?.clone()));
+        }
+        self.advance();
+
+        let mut fields = Vec::new();
+        while self.current()?.kind != CoqTokenKind::BracketCurlyRight {
+            fields.push(self.parse_record_field()?);
+            if self.current()?.kind == CoqTokenKind::SemiColon {
+                self.advance();
+            }
+        }
+        self.advance();
+        
+        let arg = if self.current()?.kind == CoqTokenKind::Word(AS.to_string()) {
+            self.advance();
+            let name = self.parse_name()?;
+            self.advance();
+            Some(name)
+        } else {
+            None
+        };
+
+        Ok(RecordBody { name, fields, arg })
+    }
+
+    fn parse_record(&mut self, token: String) -> Result<Record> {
+        self.advance();
+        let kind = self.current()?.kind.clone();
+        if let CoqTokenKind::Word(name) = kind {
+            self.advance();
+            let run = |token| token != &CoqTokenKind::Colon && token != &CoqTokenKind::Define && token != &CoqTokenKind::Dot;
+            
+            let mut binders = Vec::new();
+            let kind = self.current()?.kind.clone();
+            while run(&kind) {
+                binders.push(self.parse_binder()?);
+            }
+
+            let sort = if self.current()?.kind == CoqTokenKind::Colon {
+                self.advance();
+                Some(self.parse_term(|token| token == &CoqTokenKind::Define || token == &CoqTokenKind::Dot)?)
+            } else {
+                None
+            };
+
+            let body = if self.current()?.kind == CoqTokenKind::Define {
+                self.advance();
+                Some(self.parse_record_body()?)
+            } else {
+                None
+            };
+
+            return Ok(Record { token, name, binders, sort, body })
+        }
+        bail!(ParserError::UnexpectedToken(self.current()?.clone()));
+    }
+
     fn parse_fixpoint_annotation(&mut self) -> Result<FixAnnotation> {
         self.advance();
         self.advance();
@@ -1016,9 +1231,8 @@ impl<'a> CoqParser<'a> {
                 "Theorem" | "Lemma" | "Fact" | "Remark" | "Corollary" | "Proposition"
                 | "Property" => Ok(CoqExpression::Theorem(self.parse_theorem(word)?)),
                 "Inductive" => Ok(CoqExpression::Inductive(self.parse_inductive()?)),
-                "Definition" | "Example" => {
-                    Ok(CoqExpression::Definition(self.parse_definition(word)?))
-                }
+                "Definition" | "Example" => Ok(CoqExpression::Definition(self.parse_definition(word)?)),
+                "Record" | "Structure" => Ok(CoqExpression::Record(self.parse_record(word)?)),
                 "Fixpoint" => Ok(CoqExpression::Fixpoint(
                     self.parse_fixpoint(|token| token == &CoqTokenKind::Dot)?,
                 )),
@@ -1280,6 +1494,38 @@ impl NameCollector {
         self.close();
     }
 
+    fn get_record_field_names(&mut self, field: &RecordField) {
+        self.register(&field.name);
+        if let Some(spec) = &field.spec {
+            for binder in &spec.binders {
+                self.get_binder_names(binder);
+            }
+            if let Some(typ) = &spec.typ {
+                self.get_term_names(typ);
+            }
+            if let Some(term) = &spec.term {
+                self.get_term_names(term);
+            }
+        }
+    }
+
+    fn get_record_names(&mut self, record: &Record) {
+        self.open();
+        self.register(&record.name);
+        for binder in &record.binders {
+            self.get_binder_names(binder);
+        }
+        if let Some(sort) = &record.sort {
+            self.get_term_names(sort);
+        }
+        if let Some(body) = &record.body {
+            for field in &body.fields {
+                self.get_record_field_names(field);
+            }
+        }
+        self.close();
+    }
+
     fn get_fixpoint_names(&mut self, fixpoint: &Fixpoint) {
         self.open();
         self.register(&fixpoint.name);
@@ -1315,6 +1561,7 @@ impl NameCollector {
             CoqExpression::Theorem(theorem) => self.get_theorem_names(theorem),
             CoqExpression::Inductive(inductive) => self.get_inductive_names(inductive),
             CoqExpression::Definition(definition) => self.get_definition_names(definition),
+            CoqExpression::Record(record) => self.get_record_names(record),
             CoqExpression::Fixpoint(fixpoint) => self.get_fixpoint_names(fixpoint),
             CoqExpression::PrintVariable(variable) => self.get_print_variable_names(variable),
             CoqExpression::Goal(goals) => {
@@ -1464,6 +1711,13 @@ mod tests {
     }
 
     #[test]
+    fn fun_proj() {
+        check("proj1_sig = 
+        fun (A : Type) (P : forall (_ : A), Prop) (e : {x : A | P x}) => let (a, _) := e in a
+             : forall (A : Type) (P : forall (_ : A), Prop), forall _ : {x : A | P x}, A");
+    }
+
+    #[test]
     fn fixpoint_add_definition() {
         check(
             "Nat.add = 
@@ -1474,6 +1728,17 @@ mod tests {
           end
              : forall (_ : nat) (_ : nat), nat",
         );
+    }
+
+    #[test]
+    fn record() {
+        check("Record TopologicalSpace : Type := Build_TopologicalSpace { 
+            point_set : Type ; open : forall _ : Ensemble point_set , Prop ; 
+            open_family_union : forall ( F : Family point_set ) 
+            ( _ : forall ( S : Ensemble point_set ) ( _ : In F S ) , open S ) , open ( FamilyUnion F ) ; 
+            open_intersection2 : forall ( U V : Ensemble point_set ) ( _ : open U ) ( _ : open V ) , 
+            open ( Intersection U V ) ; 
+            open_full : open Full_set } .");
     }
 
     #[test]

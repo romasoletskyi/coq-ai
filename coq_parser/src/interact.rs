@@ -253,7 +253,11 @@ impl CoqContext {
                 let (answer, answer_tokens) = Self::check_name(process, &name)?;
                 if self.store(name, Definition::from(answer.clone())) {
                     let tokens = CoqTokenSlice::from(answer_tokens.as_slice());
-                    for s in get_names(&parse(tokens)?) {
+                    let expr = parse(tokens)?;
+                    if let CoqExpression::Tactic(_) = &expr {
+                        bail!(InteractError::UnexpectedPhrase);
+                    }
+                    for s in get_names(&expr) {
                         names.push(s);
                     }
                 }
@@ -267,6 +271,10 @@ impl CoqContext {
         let stored_name = Name(name.to_string());
         let (answer, answer_tokens) = Self::check_name(process, &stored_name)?;
         let expr = parse(CoqTokenSlice::from(answer_tokens.as_slice()))?;
+        if let CoqExpression::Tactic(_) = &expr {
+            bail!(InteractError::UnexpectedPhrase);
+        }
+
         self.store(Name(name.to_string()), Definition::from(answer.clone()));
         self.unfold(process, &expr)
     }
@@ -322,6 +330,7 @@ pub fn run_file(project: &CoqProject, data: &str) -> Result<()> {
                 context.unfold(&mut process, &goal)?;
                 phraser.advance(&mut process)?.expect("expected Proof.");
 
+                set_notation(&mut process)?;
                 while let Some((phrase, raw_answer)) = phraser.advance(&mut process)? {
                     if let CoqPhrase::Phrase(query) = phrase {
                         if parse(query)? == CoqExpression::Qed {
@@ -331,6 +340,7 @@ pub fn run_file(project: &CoqProject, data: &str) -> Result<()> {
                     context.goal = raw_answer.clone();
                     println!("{}", context.get_state());
                 }
+                unset_notation(&mut process)?;
             }
             CoqExpression::Inductive(inductive) => context.add(&mut process, &inductive.name)?,
             CoqExpression::Definition(definition) => context.add(&mut process, &definition.name)?,
