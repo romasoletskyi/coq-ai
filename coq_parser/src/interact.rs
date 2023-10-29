@@ -90,6 +90,12 @@ struct Index(usize);
 #[derive(Eq, Hash, PartialEq, Clone)]
 pub struct Name(String);
 
+impl Display for Name {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 impl From<Name> for String {
     fn from(value: Name) -> Self {
         value.0
@@ -209,11 +215,18 @@ impl CoqContext {
         }
     }
 
-    fn check_name(process: &mut PtySession, name: Name) -> Result<(String, Vec<CoqToken>)> {
-        process.send_line(&format!("Print {}.", String::from(name)))?;
+    fn check_name(process: &mut PtySession, name: &Name) -> Result<(String, Vec<CoqToken>)> {
+        println!("CHECKING {}", name.0);
+        set_notation(process)?;
+        process.send_line(&format!("Print {}.", name))?;
         let (answer, _) = process.exp_regex(COQ_REGEX)?;
-        let mut tokens = tokenize(&answer)?;
+        unset_notation(process)?;
+
+        process.send_line(&format!("Print {}.", name))?;
+        let (raw_answer, _) = process.exp_regex(COQ_REGEX)?;
+        let mut tokens = tokenize(&raw_answer)?;
         tokens.push(CoqToken::new(CoqTokenKind::NewLine, 0, 0));
+
         Ok((answer, tokens))
     }
 
@@ -237,10 +250,14 @@ impl CoqContext {
         while !names.is_empty() {
             let name = Name::from(names.pop().unwrap());
             if !self.contains(&name) {
-                let (answer, answer_tokens) = Self::check_name(process, name.clone())?;
+                let (answer, answer_tokens) = Self::check_name(process, &name)?;
                 if self.store(name, Definition::from(answer.clone())) {
                     let tokens = CoqTokenSlice::from(answer_tokens.as_slice());
-                    for s in get_names(&parse(tokens)?) {
+                    let expr = parse(tokens)?;
+                    if let CoqExpression::Tactic(_) = &expr {
+                        bail!(InteractError::UnexpectedPhrase);
+                    }
+                    for s in get_names(&expr) {
                         names.push(s);
                     }
                 }
@@ -251,8 +268,13 @@ impl CoqContext {
 
     /// Adds definition seen by Coq with given name
     fn add(&mut self, process: &mut PtySession, name: &str) -> Result<()> {
-        let (answer, answer_tokens) = CoqContext::check_name(process, Name(name.to_string()))?;
+        let stored_name = Name(name.to_string());
+        let (answer, answer_tokens) = Self::check_name(process, &stored_name)?;
         let expr = parse(CoqTokenSlice::from(answer_tokens.as_slice()))?;
+        if let CoqExpression::Tactic(_) = &expr {
+            bail!(InteractError::UnexpectedPhrase);
+        }
+
         self.store(Name(name.to_string()), Definition::from(answer.clone()));
         self.unfold(process, &expr)
     }
@@ -270,17 +292,28 @@ impl CoqContext {
     }
 }
 
+fn set_notation(process: &mut PtySession) -> Result<()> {
+    process.send_line("Set Printing Notations.")?;
+    process.exp_regex(COQ_REGEX)?;
+    Ok(())
+}
+
+fn unset_notation(process: &mut PtySession) -> Result<()> {
+    process.send_line("Unset Printing Notations.")?;
+    process.exp_regex(COQ_REGEX)?;
+    Ok(())
+}
+
 fn init_process(project: &CoqProject) -> Result<PtySession> {
     let mut process = spawn(&prepare_program(project), Some(2000))?;
     process.exp_regex(COQ_REGEX)?;
-    process.send_line("Unset Printing Notations.")?;
-    process.exp_regex(COQ_REGEX)?;
+    unset_notation(&mut process)?;
     Ok(process)
 }
 
 pub fn run_file(project: &CoqProject, data: &str) -> Result<()> {
-    let mut process = init_process(project)?;
     let data_tokens = tokenize(data)?;
+    let mut process = init_process(project)?;
     let mut phraser = CoqPhraser::new(CoqTokenSlice::from(data_tokens.as_slice()));
     let mut context = CoqContext::new();
 
@@ -297,6 +330,7 @@ pub fn run_file(project: &CoqProject, data: &str) -> Result<()> {
                 context.unfold(&mut process, &goal)?;
                 phraser.advance(&mut process)?.expect("expected Proof.");
 
+                set_notation(&mut process)?;
                 while let Some((phrase, raw_answer)) = phraser.advance(&mut process)? {
                     if let CoqPhrase::Phrase(query) = phrase {
                         if parse(query)? == CoqExpression::Qed {
@@ -306,12 +340,14 @@ pub fn run_file(project: &CoqProject, data: &str) -> Result<()> {
                     context.goal = raw_answer.clone();
                     println!("{}", context.get_state());
                 }
+                unset_notation(&mut process)?;
             }
             CoqExpression::Inductive(inductive) => context.add(&mut process, &inductive.name)?,
             CoqExpression::Definition(definition) => context.add(&mut process, &definition.name)?,
             CoqExpression::SectionStart(_) => context.open_section(),
             CoqExpression::SectionEnd(_) => context.close_section(),
-            _ => {}
+            CoqExpression::From | CoqExpression::Set | CoqExpression::Unset => {}
+            _ => bail!(InteractError::UnexpectedPhrase),
         }
     }
 
