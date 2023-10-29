@@ -1,3 +1,5 @@
 coq_parser/target
 dataset/
+train/trained-*
+.ipynb_checkpoints
 .lia.cache
