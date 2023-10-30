@@ -284,6 +284,16 @@ impl std::fmt::Display for CoqToken {
     }
 }
 
+impl Default for CoqToken {
+    fn default() -> Self {
+        CoqToken {
+            kind: CoqTokenKind::Underscore,
+            start: 0,
+            end: 0,
+        }
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct CoqTokenSlice<'a>(&'a [CoqToken]);
 
@@ -402,7 +412,7 @@ impl<'a> CoqTokenizer<'a> {
     fn tokenize(&mut self) -> Result<Vec<CoqToken>> {
         let mut tokens = Vec::new();
         while let Some(token) = self.next()? {
-            println!("{}", token);
+            // println!("{}", token);
             tokens.push(token);
         }
         Ok(tokens)

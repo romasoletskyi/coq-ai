@@ -7,7 +7,7 @@ use rexpect::session::PtySession;
 use rexpect::spawn;
 
 use crate::lexer::{tokenize, tokenize_whitespace, CoqToken, CoqTokenKind, CoqTokenSlice};
-use crate::parser::{get_names, parse, CoqExpression};
+use crate::parser::{get_names, parse, parse_early, CoqExpression};
 use crate::project::{prepare_program, CoqProject};
 
 static COQ_REGEX: &str = "\r\n[^< ]+ < ";
@@ -15,12 +15,14 @@ static COQ_REGEX: &str = "\r\n[^< ]+ < ";
 #[derive(Debug)]
 enum InteractError {
     UnexpectedPhrase,
+    UnexpectedToken,
 }
 
 impl Display for InteractError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
             InteractError::UnexpectedPhrase => write!(f, "InteractError: unexpected phrase"),
+            InteractError::UnexpectedToken => write!(f, "InteractError: unexpected token"),
         }
     }
 }
@@ -48,25 +50,43 @@ impl<'a> CoqPhraser<'a> {
         CoqPhraser { tokens }
     }
 
-    fn definite_advance(&mut self, process: &mut PtySession) -> Result<(CoqPhrase<'a>, String)> {
+    fn consume_until_dot(&mut self) -> CoqPhrase<'a> {
         let mut index = 0;
+        while self.tokens[index].kind != CoqTokenKind::Dot && index < self.tokens.len() {
+            index += 1;
+        }
+        CoqPhrase::Phrase(self.tokens.cut(index + 1))
+    }
+
+    fn consume_bullet(&mut self) -> CoqPhrase<'a> {
+        let symbol = &self.tokens[0].kind;
+        let mut index = 0;
+        while &self.tokens[index].kind == symbol && index < self.tokens.len() {
+            index += 1;
+        }
+        CoqPhrase::Bullet(self.tokens.cut(index))
+    }
+
+    fn definite_advance(&mut self, process: &mut PtySession) -> Result<(CoqPhrase<'a>, String)> {
         let query = match &self.tokens[0].kind {
+            CoqTokenKind::Word(word) => {
+                if word.parse::<usize>().is_ok() {
+                    if self.tokens[1].kind == CoqTokenKind::Colon
+                        && self.tokens[2].kind == CoqTokenKind::BracketCurlyLeft
+                    {
+                        CoqPhrase::Bullet(self.tokens.cut(3))
+                    } else {
+                        bail!(InteractError::UnexpectedToken)
+                    }
+                } else {
+                    self.consume_until_dot()
+                }
+            }
             CoqTokenKind::BracketCurlyLeft | CoqTokenKind::BracketCurlyRight => {
                 CoqPhrase::Bullet(self.tokens.cut(1))
             }
-            CoqTokenKind::Dash | CoqTokenKind::Plus | CoqTokenKind::Star => {
-                let symbol = &self.tokens[0].kind;
-                while &self.tokens[index].kind == symbol && index < self.tokens.len() {
-                    index += 1;
-                }
-                CoqPhrase::Bullet(self.tokens.cut(index))
-            }
-            _ => {
-                while self.tokens[index].kind != CoqTokenKind::Dot && index < self.tokens.len() {
-                    index += 1;
-                }
-                CoqPhrase::Phrase(self.tokens.cut(index + 1))
-            }
+            CoqTokenKind::Dash | CoqTokenKind::Plus | CoqTokenKind::Star => self.consume_bullet(),
+            _ => self.consume_until_dot(),
         };
 
         process.send_line(&query.to_string())?;
@@ -89,6 +109,16 @@ struct Index(usize);
 
 #[derive(Eq, Hash, PartialEq, Clone)]
 pub struct Name(String);
+
+impl Name {
+    fn get_printable(&self) -> &str {
+        if self.0.starts_with("@") {
+            &self.0[1..]
+        } else {
+            &self.0
+        }
+    }
+}
 
 impl Display for Name {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -218,11 +248,11 @@ impl CoqContext {
     fn check_name(process: &mut PtySession, name: &Name) -> Result<(String, Vec<CoqToken>)> {
         println!("CHECKING {}", name.0);
         set_notation(process)?;
-        process.send_line(&format!("Print {}.", name))?;
+        process.send_line(&format!("Print {}.", name.get_printable()))?;
         let (answer, _) = process.exp_regex(COQ_REGEX)?;
         unset_notation(process)?;
 
-        process.send_line(&format!("Print {}.", name))?;
+        process.send_line(&format!("Print {}.", name.get_printable()))?;
         let (raw_answer, _) = process.exp_regex(COQ_REGEX)?;
         let mut tokens = tokenize(&raw_answer)?;
         tokens.push(CoqToken::new(CoqTokenKind::NewLine, 0, 0));
@@ -305,7 +335,9 @@ fn unset_notation(process: &mut PtySession) -> Result<()> {
 }
 
 fn init_process(project: &CoqProject) -> Result<PtySession> {
-    let mut process = spawn(&prepare_program(project), Some(2000))?;
+    let mut process = spawn(&prepare_program(project), Some(5000))?;
+    process.exp_regex(COQ_REGEX)?;
+    process.send_line("Set Printing Depth 1000.")?;
     process.exp_regex(COQ_REGEX)?;
     unset_notation(&mut process)?;
     Ok(process)
@@ -320,7 +352,7 @@ pub fn run_file(project: &CoqProject, data: &str) -> Result<()> {
     while let Some((phrase, raw_answer)) = phraser.advance(&mut process)? {
         let answer = tokenize_whitespace(&raw_answer)?;
         let expression = match phrase {
-            CoqPhrase::Phrase(query) => parse(query)?,
+            CoqPhrase::Phrase(query) => parse_early(query)?,
             _ => bail!(InteractError::UnexpectedPhrase),
         };
 
@@ -338,9 +370,14 @@ pub fn run_file(project: &CoqProject, data: &str) -> Result<()> {
                         }
                     }
                     context.goal = raw_answer.clone();
-                    println!("{}", context.get_state());
+                    // println!("{}", context.goal);
                 }
                 unset_notation(&mut process)?;
+            }
+            CoqExpression::Assumption(assumption) => {
+                for name in &assumption.names {
+                    context.add(&mut process, name)?;
+                }
             }
             CoqExpression::Inductive(inductive) => context.add(&mut process, &inductive.name)?,
             CoqExpression::Definition(definition) => context.add(&mut process, &definition.name)?,
