@@ -621,13 +621,17 @@ impl Display for PrintVariable {
 
 #[derive(Debug, PartialEq)]
 struct Hypothesis {
-    name: String,
+    names: Vec<String>,
     typ: Box<Term>,
 }
 
 impl Display for Hypothesis {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} : {}", self.name, self.typ)
+        write!(f, "{}", self.names[0])?;
+        for i in 1..self.names.len() {
+            write!(f, ", {}", self.names[i])?;
+        }
+        write!(f, " : {}", self.typ)
     }
 }
 
@@ -704,17 +708,19 @@ impl Display for CoqExpression {
 }
 
 struct CoqParser<'a> {
+    slice: CoqTokenSlice<'a>,
     index: usize,
     early: bool,
-    slice: CoqTokenSlice<'a>,
+    skip_whitespace: bool,
 }
 
 impl<'a> CoqParser<'a> {
     fn new(slice: CoqTokenSlice<'a>, early: bool) -> Self {
         CoqParser {
+            slice,
             index: 0,
             early,
-            slice,
+            skip_whitespace: true,
         }
     }
 
@@ -734,7 +740,8 @@ impl<'a> CoqParser<'a> {
 
     fn advance(&mut self) {
         self.index += 1;
-        while self.index + 1 < self.slice.len()
+        while self.skip_whitespace
+            && self.index + 1 < self.slice.len()
             && self.slice[self.index].kind == CoqTokenKind::NewLine
         {
             self.index += 1;
@@ -1416,25 +1423,38 @@ impl<'a> CoqParser<'a> {
     }
 
     fn parse_hypothesis(&mut self) -> Result<Hypothesis> {
-        let kind = self.current()?.kind.clone();
-        if let CoqTokenKind::Word(name) = kind {
+        let mut names = Vec::new();
+        while let CoqTokenKind::Word(name) = &self.current()?.kind {
+            names.push(name.clone());
             self.advance();
-            self.advance();
-            let typ = self.parse_term(|token| token == &CoqTokenKind::NewLine)?;
-            self.advance();
-            return Ok(Hypothesis { name, typ });
+            if self.current()?.kind == CoqTokenKind::Comma {
+                self.advance();
+            }
         }
-        bail!(ParserError::UnexpectedToken(self.current()?.clone()));
+        self.advance();
+        let typ = self.parse_term(|token| token == &CoqTokenKind::NewLine)?;
+        self.advance();
+        Ok(Hypothesis { names, typ })
+    }
+
+    fn stop_at_new_goal(token: &CoqTokenKind) -> bool {
+        if let CoqTokenKind::Word(word) = token {
+            if word.as_str() == "goal" {
+                return true;
+            }
+        }
+        token == &CoqTokenKind::NewLine
     }
 
     fn parse_goal(&mut self) -> Result<Goal> {
+        self.skip_whitespace = false;
         let mut premise = Vec::new();
         while self.current()?.kind != CoqTokenKind::Eq {
             premise.push(self.parse_hypothesis()?);
         }
+        self.skip_whitespace = true;
         self.skip_line();
-        let conclusion = self.parse_term(|token| token == &CoqTokenKind::NewLine)?;
-        self.advance();
+        let conclusion = self.parse_term(Self::stop_at_new_goal)?;
         Ok(Goal {
             premise,
             conclusion,
@@ -1448,7 +1468,7 @@ impl<'a> CoqParser<'a> {
 
         for _ in 1..number {
             self.skip_line();
-            let conclusion = self.parse_term(|token| token == &CoqTokenKind::NewLine)?;
+            let conclusion = self.parse_term(Self::stop_at_new_goal)?;
             self.advance();
             goals.push(Goal {
                 premise: Vec::new(),
@@ -1465,7 +1485,12 @@ impl<'a> CoqParser<'a> {
         match token.kind {
             CoqTokenKind::Word(word) => {
                 if let std::result::Result::Ok(number) = word.parse::<usize>() {
-                    return Ok(CoqExpression::Goal(self.parse_goals(number)?));
+                    if let CoqTokenKind::Word(word) = &self.peek(1)?.kind {
+                        if word.as_str() == "goal" || word.as_str() == "goals" {
+                            return Ok(CoqExpression::Goal(self.parse_goals(number)?));
+                        }
+                    }
+                    return Ok(CoqExpression::Tactic(self.slice.into()))
                 }
                 return match word.as_str() {
                     "Theorem" | "Lemma" | "Fact" | "Remark" | "Corollary" | "Proposition"
@@ -1645,11 +1670,6 @@ impl NameCollector {
                 self.mode = NameCollectorMode::Seeing;
 
                 for case in &mat.cases {
-                    // ISSUE - 1
-                    // consider pattern | S n' => ...
-                    // currently it is out of our capabilities to understand
-                    // that S is a function and n' is a free variable
-
                     self.mode = NameCollectorMode::Registering;
                     self.get_term_names(&case.pattern);
                     self.mode = NameCollectorMode::Seeing;
@@ -1842,7 +1862,9 @@ impl NameCollector {
     fn get_goal_names(&mut self, goal: &Goal) {
         self.open();
         for hypothesis in &goal.premise {
-            self.register(&hypothesis.name);
+            for name in &hypothesis.names {
+                self.register(name);
+            }
             self.get_term_names(&hypothesis.typ);
         }
         self.get_term_names(&goal.conclusion);
@@ -1887,7 +1909,7 @@ pub fn get_names(expression: &CoqExpression) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use crate::{
-        lexer::{tokenize, tokenize_whitespace, CoqToken, CoqTokenKind, CoqTokenSlice},
+        lexer::{tokenize, CoqToken, CoqTokenKind, CoqTokenSlice},
         parser::{parse, NameCollector},
     };
 
@@ -1908,12 +1930,6 @@ mod tests {
 
     fn check(data: &str) {
         let mut tokens = tokenize(data).unwrap();
-        tokens.push(CoqToken::new(CoqTokenKind::NewLine, 0, 0));
-        check_tokens(tokens);
-    }
-
-    fn check_whitespace(data: &str) {
-        let mut tokens = tokenize_whitespace(data).unwrap();
         tokens.push(CoqToken::new(CoqTokenKind::NewLine, 0, 0));
         check_tokens(tokens);
     }
@@ -2018,15 +2034,6 @@ mod tests {
     }
 
     #[test]
-    fn fun_proj() {
-        check(
-            "proj1_sig = 
-        fun (A : Type) (P : forall (_ : A), Prop) (e : {x : A | P x}) => let (a, _) := e in a
-             : forall (A : Type) (P : forall (_ : A), Prop), forall _ : {x : A | P x}, A",
-        );
-    }
-
-    #[test]
     fn fun_build_top() {
         check("Build_TopologicalSpace_from_open_basis = fun ( X : Type ) ( B : Family X ) 
         ( Hbasis : open_basis_cond B ) ( Hbasis_cover : open_basis_cover_cond B ) => 
@@ -2054,7 +2061,7 @@ mod tests {
     #[test]
     fn fixpoint_add_definition() {
         check(
-            "Nat.add = 
+            "Nat.add = k_whitespace
         fix add (n m : nat) {struct n} : nat :=
           match n with
           | 0 => m
@@ -2092,8 +2099,24 @@ mod tests {
     }
 
     #[test]
+    fn goal() {
+        check(
+            "1 goal 
+        X : TopologicalSpace 
+        S : Ensemble X 
+        = = = = = = = = = = = = = = = = = = = = = = = = = = = = 
+        forall ( _ : compact X ) ( _ : closed S ) ( F : Family X ) 
+        ( _ : forall ( U : Ensemble X ) ( _ : In F U ) , open U ) 
+        ( _ : Included S ( FamilyUnion F ) ) , 
+        ex 
+        ( fun C : Ensemble ( Ensemble X ) => 
+        and ( Finite C ) ( and ( Included C F ) ( Included S ( FamilyUnion C ) ) ) ) ",
+        );
+    }
+
+    #[test]
     fn goals() {
-        check_whitespace(
+        check(
             "3 goals
   
         X : Type

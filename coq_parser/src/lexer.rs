@@ -75,7 +75,7 @@ impl std::fmt::Display for CoqTokenKind {
             Self::Question => "?",
             Self::Underscore => "_",
             Self::Percent => "%",
-            Self::NewLine => "\n",
+            Self::NewLine => "",
             Self::Word(s) => s,
         };
         write!(f, "{}", text)
@@ -153,9 +153,16 @@ fn skip_comments(data: &str) -> usize {
     let mut length = 0;
     if copy.starts_with("(*") {
         while !copy.is_empty() && !copy.starts_with("*)") {
-            let chunk = copy.chars().next().unwrap().len_utf8();
+            let chunk = if copy.starts_with("(*") && length > 0 {
+                skip_comments(copy)
+            } else {
+                copy.chars().next().unwrap().len_utf8()
+            };
             copy = &copy[chunk..];
             length += chunk;
+        }
+        if copy.starts_with("*)") {
+            length += 2;
         }
     }
     length
@@ -346,21 +353,19 @@ impl<'a> std::fmt::Display for CoqTokenSlice<'a> {
 pub struct CoqTokenizer<'a> {
     index: usize,
     text: &'a str,
-    save_whitespace: bool,
 }
 
 impl<'a> CoqTokenizer<'a> {
-    fn new(data: &'a str, save_whitespace: bool) -> Self {
+    fn new(data: &'a str) -> Self {
         CoqTokenizer {
             index: 0,
             text: data,
-            save_whitespace,
         }
     }
 
     fn next(&mut self) -> Result<Option<CoqToken>> {
         let (size, new_line) = self.skip();
-        if self.save_whitespace && new_line {
+        if new_line {
             return Ok(Some(CoqToken {
                 kind: CoqTokenKind::NewLine,
                 start: self.index - size,
@@ -412,7 +417,7 @@ impl<'a> CoqTokenizer<'a> {
     fn tokenize(&mut self) -> Result<Vec<CoqToken>> {
         let mut tokens = Vec::new();
         while let Some(token) = self.next()? {
-            // println!("{}", token);
+            println!("{}", token);
             tokens.push(token);
         }
         Ok(tokens)
@@ -420,12 +425,7 @@ impl<'a> CoqTokenizer<'a> {
 }
 
 pub fn tokenize(data: &str) -> Result<Vec<CoqToken>> {
-    let mut tokenizer = CoqTokenizer::new(data, false);
-    tokenizer.tokenize()
-}
-
-pub fn tokenize_whitespace(data: &str) -> Result<Vec<CoqToken>> {
-    let mut tokenizer = CoqTokenizer::new(data, true);
+    let mut tokenizer = CoqTokenizer::new(data);
     tokenizer.tokenize()
 }
 
@@ -442,6 +442,25 @@ mod tests {
           exists C':Family X,
             Finite C' /\\ Included C' C /\\
             FamilyUnion C' = Full_set. ",
+        );
+        println!("{:?}", tokens);
+    }
+
+    #[test]
+    fn comments() {
+        let tokens = tokenize(
+            "
+        (* Every closed subset of a compact space is compact, but avoid
+            mentioning the subspace topology. *)
+        (* these comments (* are nested *) and can be non-trivial *)
+         Lemma closed_compact_ens (X : TopologicalSpace) (S : Ensemble X) :
+           compact X -> closed S ->
+           forall F : Family X,
+             (forall U, In F U -> open U) ->
+             Included S (FamilyUnion F) ->
+             exists C,
+               Finite C /\\ Included C F /\\
+                 Included S (FamilyUnion C).",
         );
         println!("{:?}", tokens);
     }

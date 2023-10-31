@@ -6,7 +6,7 @@ use anyhow::{bail, Ok, Result};
 use rexpect::session::PtySession;
 use rexpect::spawn;
 
-use crate::lexer::{tokenize, tokenize_whitespace, CoqToken, CoqTokenKind, CoqTokenSlice};
+use crate::lexer::{tokenize, CoqToken, CoqTokenKind, CoqTokenSlice};
 use crate::parser::{get_names, parse, parse_early, CoqExpression};
 use crate::project::{prepare_program, CoqProject};
 
@@ -50,9 +50,17 @@ impl<'a> CoqPhraser<'a> {
         CoqPhraser { tokens }
     }
 
+    fn skip_whitespace(&mut self) {
+        let mut index = 0;
+        while index < self.tokens.len() && self.tokens[index].kind == CoqTokenKind::NewLine {
+            index += 1;
+        }
+        self.tokens.cut(index);
+    }
+
     fn consume_until_dot(&mut self) -> CoqPhrase<'a> {
         let mut index = 0;
-        while self.tokens[index].kind != CoqTokenKind::Dot && index < self.tokens.len() {
+        while index < self.tokens.len() && self.tokens[index].kind != CoqTokenKind::Dot {
             index += 1;
         }
         CoqPhrase::Phrase(self.tokens.cut(index + 1))
@@ -61,27 +69,26 @@ impl<'a> CoqPhraser<'a> {
     fn consume_bullet(&mut self) -> CoqPhrase<'a> {
         let symbol = &self.tokens[0].kind;
         let mut index = 0;
-        while &self.tokens[index].kind == symbol && index < self.tokens.len() {
+        while index < self.tokens.len() && &self.tokens[index].kind == symbol {
             index += 1;
         }
         CoqPhrase::Bullet(self.tokens.cut(index))
     }
 
-    fn definite_advance(&mut self, process: &mut PtySession) -> Result<(CoqPhrase<'a>, String)> {
-        let query = match &self.tokens[0].kind {
-            CoqTokenKind::Word(word) => {
-                if word.parse::<usize>().is_ok() {
-                    if self.tokens[1].kind == CoqTokenKind::Colon
-                        && self.tokens[2].kind == CoqTokenKind::BracketCurlyLeft
-                    {
-                        CoqPhrase::Bullet(self.tokens.cut(3))
-                    } else {
-                        bail!(InteractError::UnexpectedToken)
-                    }
-                } else {
-                    self.consume_until_dot()
+    fn analyze_word(&mut self, word: String) -> CoqPhrase<'a> {
+        if word.parse::<usize>().is_ok() {
+            if self.tokens[1].kind == CoqTokenKind::Colon {
+                if self.tokens[2].kind == CoqTokenKind::BracketCurlyLeft {
+                    return CoqPhrase::Bullet(self.tokens.cut(3));
                 }
             }
+        }
+        self.consume_until_dot()
+    }
+
+    fn definite_advance(&mut self, process: &mut PtySession) -> Result<(CoqPhrase<'a>, String)> {
+        let query = match &self.tokens[0].kind {
+            CoqTokenKind::Word(word) => self.analyze_word(word.clone()),
             CoqTokenKind::BracketCurlyLeft | CoqTokenKind::BracketCurlyRight => {
                 CoqPhrase::Bullet(self.tokens.cut(1))
             }
@@ -96,6 +103,7 @@ impl<'a> CoqPhraser<'a> {
     }
 
     fn advance(&mut self, process: &mut PtySession) -> Result<Option<(CoqPhrase<'a>, String)>> {
+        self.skip_whitespace();
         if self.tokens.is_empty() {
             Ok(None)
         } else {
@@ -350,7 +358,7 @@ pub fn run_file(project: &CoqProject, data: &str) -> Result<()> {
     let mut context = CoqContext::new();
 
     while let Some((phrase, raw_answer)) = phraser.advance(&mut process)? {
-        let answer = tokenize_whitespace(&raw_answer)?;
+        let answer = tokenize(&raw_answer)?;
         let expression = match phrase {
             CoqPhrase::Phrase(query) => parse_early(query)?,
             _ => bail!(InteractError::UnexpectedPhrase),
