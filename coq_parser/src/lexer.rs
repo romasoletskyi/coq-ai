@@ -275,8 +275,8 @@ fn get_next_token(data: &str) -> Result<(CoqTokenKind, usize)> {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CoqToken {
     pub kind: CoqTokenKind,
-    start: usize,
-    end: usize,
+    pub start: usize,
+    pub end: usize,
 }
 
 impl CoqToken {
@@ -417,7 +417,6 @@ impl<'a> CoqTokenizer<'a> {
     fn tokenize(&mut self) -> Result<Vec<CoqToken>> {
         let mut tokens = Vec::new();
         while let Some(token) = self.next()? {
-            println!("{}", token);
             tokens.push(token);
         }
         Ok(tokens)

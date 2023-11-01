@@ -1480,7 +1480,6 @@ impl<'a> CoqParser<'a> {
     }
 
     fn parse_expression(&mut self) -> Result<CoqExpression> {
-        println!("{}", self.slice);
         let token = self.current()?.clone();
         match token.kind {
             CoqTokenKind::Word(word) => {
@@ -1490,7 +1489,7 @@ impl<'a> CoqParser<'a> {
                             return Ok(CoqExpression::Goal(self.parse_goals(number)?));
                         }
                     }
-                    return Ok(CoqExpression::Tactic(self.slice.into()))
+                    return Ok(CoqExpression::Tactic(self.slice.into()));
                 }
                 return match word.as_str() {
                     "Theorem" | "Lemma" | "Fact" | "Remark" | "Corollary" | "Proposition"

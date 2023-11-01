@@ -15,14 +15,12 @@ static COQ_REGEX: &str = "\r\n[^< ]+ < ";
 #[derive(Debug)]
 enum InteractError {
     UnexpectedPhrase,
-    UnexpectedToken,
 }
 
 impl Display for InteractError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
             InteractError::UnexpectedPhrase => write!(f, "InteractError: unexpected phrase"),
-            InteractError::UnexpectedToken => write!(f, "InteractError: unexpected token"),
         }
     }
 }
@@ -30,6 +28,16 @@ impl Display for InteractError {
 enum CoqPhrase<'a> {
     Phrase(CoqTokenSlice<'a>),
     Bullet(CoqTokenSlice<'a>),
+}
+
+impl<'a> CoqPhrase<'a> {
+    fn slice(&self) -> CoqTokenSlice<'a> {
+        match &self {
+            CoqPhrase::Phrase(slice) => slice,
+            CoqPhrase::Bullet(slice) => slice,
+        }
+        .clone()
+    }
 }
 
 impl<'a> ToString for CoqPhrase<'a> {
@@ -41,13 +49,25 @@ impl<'a> ToString for CoqPhrase<'a> {
     }
 }
 
+struct CoqAnswer<'a> {
+    phrase: CoqPhrase<'a>,
+    raw_phrase: &'a str,
+    raw_answer: String,
+}
+
 struct CoqPhraser<'a> {
+    data: &'a str,
     tokens: CoqTokenSlice<'a>,
+    pivot: usize,
 }
 
 impl<'a> CoqPhraser<'a> {
-    fn new(tokens: CoqTokenSlice<'a>) -> Self {
-        CoqPhraser { tokens }
+    fn new(data: &'a str, tokens: CoqTokenSlice<'a>) -> Self {
+        CoqPhraser {
+            data,
+            tokens,
+            pivot: 0,
+        }
     }
 
     fn skip_whitespace(&mut self) {
@@ -86,8 +106,8 @@ impl<'a> CoqPhraser<'a> {
         self.consume_until_dot()
     }
 
-    fn definite_advance(&mut self, process: &mut PtySession) -> Result<(CoqPhrase<'a>, String)> {
-        let query = match &self.tokens[0].kind {
+    fn definite_advance(&mut self, process: &mut PtySession) -> Result<CoqAnswer<'a>> {
+        let phrase = match &self.tokens[0].kind {
             CoqTokenKind::Word(word) => self.analyze_word(word.clone()),
             CoqTokenKind::BracketCurlyLeft | CoqTokenKind::BracketCurlyRight => {
                 CoqPhrase::Bullet(self.tokens.cut(1))
@@ -96,13 +116,23 @@ impl<'a> CoqPhraser<'a> {
             _ => self.consume_until_dot(),
         };
 
-        process.send_line(&query.to_string())?;
-        let (mut answer, _) = process.exp_regex(COQ_REGEX)?;
-        answer.push('\n');
-        Ok((query, answer))
+        process.send_line(&phrase.to_string())?;
+        let (mut raw_answer, _) = process.exp_regex(COQ_REGEX)?;
+        raw_answer.push('\n');
+
+        let slice = phrase.slice();
+        let end = slice[slice.len() - 1].end;
+        let answer = CoqAnswer {
+            phrase,
+            raw_phrase: &self.data[self.pivot..end],
+            raw_answer,
+        };
+
+        self.pivot = end;
+        Ok(answer)
     }
 
-    fn advance(&mut self, process: &mut PtySession) -> Result<Option<(CoqPhrase<'a>, String)>> {
+    fn advance(&mut self, process: &mut PtySession) -> Result<Option<CoqAnswer<'a>>> {
         self.skip_whitespace();
         if self.tokens.is_empty() {
             Ok(None)
@@ -134,31 +164,19 @@ impl Display for Name {
     }
 }
 
-impl From<Name> for String {
-    fn from(value: Name) -> Self {
-        value.0
-    }
-}
-
-impl From<String> for Name {
-    fn from(value: String) -> Self {
-        Name(value)
-    }
-}
+#[derive(Eq, Hash, PartialEq, Clone)]
+struct DefinitionBody(String);
 
 #[derive(Eq, Hash, PartialEq, Clone)]
-pub struct Definition(String);
-
-impl Definition {
-    pub fn from(s: String) -> Self {
-        Definition(s)
-    }
+struct Definition {
+    body: DefinitionBody,
+    depend: Vec<Name>,
 }
 
 struct DefinitionStorage {
     names: HashMap<Name, Index>,
     def: HashMap<Index, Definition>,
-    bag: HashMap<Definition, Index>,
+    bag: HashMap<DefinitionBody, Index>,
     index: Index,
 }
 
@@ -175,22 +193,21 @@ impl DefinitionStorage {
         }
     }
 
-    fn contains(&self, name: &Name) -> bool {
+    fn contains_name(&self, name: &Name) -> bool {
         self.names.contains_key(name)
     }
 
-    fn store(&mut self, name: Name, def: Definition) -> (Index, bool) {
-        let (index, new) = if let Some(&ind) = self.bag.get(&def) {
-            (ind, false)
-        } else {
-            self.bag.insert(def.clone(), self.index);
-            self.def.insert(self.index, def);
-            let ind = self.index;
-            self.index.0 += 1;
-            (ind, true)
-        };
+    fn contains_definition(&self, def: &DefinitionBody) -> bool {
+        self.bag.contains_key(def)
+    }
+
+    fn store(&mut self, name: Name, def: Definition) -> Index {
+        self.bag.insert(def.body.clone(), self.index);
+        self.def.insert(self.index, def);
+        let index = self.index;
+        self.index.0 += 1;
         self.names.insert(name, index);
-        (index, new)
+        index
     }
 
     fn get(&self, index: &Index) -> Option<&Definition> {
@@ -202,27 +219,11 @@ impl DefinitionStorage {
     }
 }
 
-struct State {
-    definitions: Vec<String>,
-    goal: String,
-}
-
-impl Display for State {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for definition in &self.definitions {
-            writeln!(f, "{}", definition)?;
-        }
-        write!(f, "{}", self.goal)
-    }
-}
-
 /// Produces context needed to understand current state of proof.
 /// Context contains all unfolded definitions of functions/types and proof goal
 struct CoqContext {
     /// Storage of all definitions seen by CoqContext, indexed by Index
     storage: DefinitionStorage,
-    /// Theorem goal
-    goal: String,
     /// Definitions registered in nested sections, separated by bottom in blocks [x1 x2 ...] [y1 y2 ...] ...
     register: Vec<(Index, Name)>,
     /// Start of each registered block
@@ -233,10 +234,13 @@ impl CoqContext {
     fn new() -> Self {
         CoqContext {
             storage: DefinitionStorage::new(),
-            goal: String::new(),
             register: Vec::new(),
             bottom: Vec::new(),
         }
+    }
+
+    fn get_definition(&self, index: &Index) -> Option<&Definition> {
+        self.storage.get(index)
     }
 
     fn open_section(&mut self) {
@@ -254,10 +258,10 @@ impl CoqContext {
     }
 
     fn check_name(process: &mut PtySession, name: &Name) -> Result<(String, Vec<CoqToken>)> {
-        println!("CHECKING {}", name.0);
         set_notation(process)?;
         process.send_line(&format!("Print {}.", name.get_printable()))?;
-        let (answer, _) = process.exp_regex(COQ_REGEX)?;
+        let (mut answer, _) = process.exp_regex(COQ_REGEX)?;
+        answer = answer.split("Arguments").next().unwrap().trim().to_string();
         unset_notation(process)?;
 
         process.send_line(&format!("Print {}.", name.get_printable()))?;
@@ -268,40 +272,52 @@ impl CoqContext {
         Ok((answer, tokens))
     }
 
-    fn contains(&self, name: &Name) -> bool {
+    fn contains_name(&self, name: &Name) -> bool {
         if name.0.parse::<usize>().is_ok() {
-            false
+            true
         } else {
-            self.storage.contains(name)
+            self.storage.contains_name(name)
         }
     }
 
-    fn store(&mut self, name: Name, def: Definition) -> bool {
-        let (index, new) = self.storage.store(name.clone(), def);
+    fn contains_definition(&self, def: &DefinitionBody) -> bool {
+        self.storage.contains_definition(&def)
+    }
+
+    fn store(&mut self, name: Name, def: Definition) {
+        let index = self.storage.store(name.clone(), def);
         self.register.push((index, name));
-        new
     }
 
     /// Unfolds definition recursively and correspondingly updates context
-    fn unfold(&mut self, process: &mut PtySession, expression: &CoqExpression) -> Result<()> {
+    fn unfold(
+        &mut self,
+        process: &mut PtySession,
+        expression: &CoqExpression,
+    ) -> Result<Vec<Name>> {
         let mut names = get_names(expression);
+        let depend = names.iter().map(|x| Name(x.clone())).collect();
         while !names.is_empty() {
-            let name = Name::from(names.pop().unwrap());
-            if !self.contains(&name) {
+            let name = Name(names.pop().unwrap());
+            if !self.contains_name(&name) {
                 let (answer, answer_tokens) = Self::check_name(process, &name)?;
-                if self.store(name, Definition::from(answer.clone())) {
+                let body = DefinitionBody(answer.clone());
+                if !self.contains_definition(&body) {
                     let tokens = CoqTokenSlice::from(answer_tokens.as_slice());
                     let expr = parse(tokens)?;
                     if let CoqExpression::Tactic(_) = &expr {
                         bail!(InteractError::UnexpectedPhrase);
                     }
+                    let mut depend = Vec::new();
                     for s in get_names(&expr) {
+                        depend.push(Name(s.clone()));
                         names.push(s);
                     }
+                    self.store(name, Definition { body, depend })
                 }
             }
         }
-        Ok(())
+        Ok(depend)
     }
 
     /// Adds definition seen by Coq with given name
@@ -313,20 +329,80 @@ impl CoqContext {
             bail!(InteractError::UnexpectedPhrase);
         }
 
-        self.store(Name(name.to_string()), Definition::from(answer.clone()));
-        self.unfold(process, &expr)
+        let depend = self.unfold(process, &expr)?;
+        self.store(
+            Name(name.to_string()),
+            Definition {
+                body: DefinitionBody(answer),
+                depend,
+            },
+        );
+        Ok(())
+    }
+}
+
+struct State {
+    definitions: Vec<String>,
+    premise: String,
+    proof: String,
+    goal: String,
+    tactic: String,
+}
+
+impl Display for State {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<|context|> ")?;
+        for definition in &self.definitions {
+            writeln!(f, "{}", definition)?;
+        }
+        writeln!(f, "<|premise|> {}", self.premise)?;
+        writeln!(f, "<|proof|> {}", self.proof)?;
+        writeln!(f, "<|goal|> {}", self.goal)?;
+        writeln!(f, "<|tactic|> {}", self.tactic)
+    }
+}
+
+impl State {
+    fn new() -> Self {
+        Self {
+            definitions: Vec::new(),
+            premise: String::new(),
+            proof: String::new(),
+            goal: String::new(),
+            tactic: String::new(),
+        }
     }
 
-    /// Get all registered definitions and current goal
-    fn get_state(&self) -> State {
-        let mut definitions = Vec::new();
-        for (index, _) in &self.register {
-            definitions.push(self.storage.get(index).unwrap().0.clone());
+    fn definitions(&mut self, context: &CoqContext) -> &mut Self {
+        for (index, _) in &context.register {
+            self.definitions
+                .push(context.get_definition(index).unwrap().body.0.clone())
         }
-        State {
-            definitions,
-            goal: self.goal.clone(),
-        }
+        self
+    }
+
+    fn premise(&mut self, premise: &str) -> &mut Self {
+        self.premise = premise.to_string();
+        self
+    }
+
+    fn extend_proof(&mut self, tactic: &str) -> &mut Self {
+        self.proof.push_str(tactic);
+        self
+    }
+
+    fn goal(&mut self, goal: &str) -> &mut Self {
+        self.goal = goal.to_string();
+        self
+    }
+
+    fn tactic(&mut self, tactic: &str) -> &mut Self {
+        self.tactic = tactic.to_string();
+        self
+    }
+
+    fn get_tactic(&self) -> String {
+        self.tactic.clone()
     }
 }
 
@@ -354,10 +430,15 @@ fn init_process(project: &CoqProject) -> Result<PtySession> {
 pub fn run_file(project: &CoqProject, data: &str) -> Result<()> {
     let data_tokens = tokenize(data)?;
     let mut process = init_process(project)?;
-    let mut phraser = CoqPhraser::new(CoqTokenSlice::from(data_tokens.as_slice()));
+    let mut phraser = CoqPhraser::new(data, CoqTokenSlice::from(data_tokens.as_slice()));
     let mut context = CoqContext::new();
 
-    while let Some((phrase, raw_answer)) = phraser.advance(&mut process)? {
+    while let Some(CoqAnswer {
+        phrase,
+        raw_phrase,
+        raw_answer,
+    }) = phraser.advance(&mut process)?
+    {
         let answer = tokenize(&raw_answer)?;
         let expression = match phrase {
             CoqPhrase::Phrase(query) => parse_early(query)?,
@@ -368,17 +449,38 @@ pub fn run_file(project: &CoqProject, data: &str) -> Result<()> {
             CoqExpression::Theorem(_) => {
                 let goal = parse(CoqTokenSlice::from(answer.as_slice()))?;
                 context.unfold(&mut process, &goal)?;
-                phraser.advance(&mut process)?.expect("expected Proof.");
 
+                let mut state = State::new();
+                state
+                    .definitions(&context)
+                    .premise(&raw_phrase)
+                    .goal(&raw_answer)
+                    .tactic("Proof.");
+                println!("{}", state);
+
+                phraser.advance(&mut process)?.expect("expected Proof.");
+                let mut previous_goal = String::new();
                 set_notation(&mut process)?;
-                while let Some((phrase, raw_answer)) = phraser.advance(&mut process)? {
+
+                while let Some(CoqAnswer {
+                    phrase,
+                    raw_phrase,
+                    raw_answer,
+                }) = phraser.advance(&mut process)?
+                {
                     if let CoqPhrase::Phrase(query) = phrase {
                         if parse(query)? == CoqExpression::Qed {
                             break;
                         }
                     }
-                    context.goal = raw_answer.clone();
-                    // println!("{}", context.goal);
+
+                    let tactic = state.get_tactic();
+                    state
+                        .extend_proof(&tactic)
+                        .goal(&previous_goal)
+                        .tactic(&raw_phrase);
+                    previous_goal = raw_answer.trim().to_string();
+                    println!("{}", state);
                 }
                 unset_notation(&mut process)?;
             }
