@@ -448,6 +448,7 @@ pub fn run_file(project: &CoqProject, data: &str) -> Result<()> {
         match &expression {
             CoqExpression::Theorem(_) => {
                 let goal = parse(CoqTokenSlice::from(answer.as_slice()))?;
+                context.open_section();
                 context.unfold(&mut process, &goal)?;
 
                 let mut state = State::new();
@@ -483,6 +484,7 @@ pub fn run_file(project: &CoqProject, data: &str) -> Result<()> {
                     println!("{}", state);
                 }
                 unset_notation(&mut process)?;
+                context.close_section();
             }
             CoqExpression::Assumption(assumption) => {
                 for name in &assumption.names {

@@ -1,5 +1,5 @@
 use anyhow::{bail, Result};
-use std::ops::Index;
+use std::ops::{Index, RangeFrom};
 use std::str::Chars;
 
 #[derive(Debug, Clone, PartialEq)]
