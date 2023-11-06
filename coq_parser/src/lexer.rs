@@ -34,6 +34,7 @@ pub enum CoqTokenKind {
     Not,
     Pipe,
     Question,
+    Exclamation,
     Underscore,
     Percent,
     Ampersand,
@@ -74,6 +75,7 @@ impl std::fmt::Display for CoqTokenKind {
             Self::Not => "~",
             Self::Pipe => "|",
             Self::Question => "?",
+            Self::Exclamation => "!",
             Self::Underscore => "_",
             Self::Percent => "%",
             Self::Ampersand => "&",
@@ -270,6 +272,7 @@ fn get_next_token(data: &str) -> Result<(CoqTokenKind, usize)> {
         '|' => (CoqTokenKind::Pipe, 1),
         '%' => (CoqTokenKind::Percent, 1),
         '&' => (CoqTokenKind::Ampersand, 1),
+        '!' => (CoqTokenKind::Exclamation, 1),
         _ => tokenize_word(data)?,
     };
     Ok(result)
