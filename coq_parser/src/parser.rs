@@ -5,7 +5,7 @@ use crate::lexer::{CoqToken, CoqTokenKind, CoqTokenSlice};
 
 #[derive(Debug, Clone)]
 pub(crate) struct Stopper {
-    tokens: HashSet<CoqTokenKind>
+    tokens: HashSet<CoqTokenKind>,
 }
 
 #[macro_export]
@@ -803,10 +803,12 @@ impl<'a> CoqParser<'a> {
                 let mut cases = Vec::new();
                 while self.current()?.kind == CoqTokenKind::Pipe {
                     self.advance();
-                    let pattern =
-                        self.parse_term(stop!(CoqTokenKind::Case))?;
+                    let pattern = self.parse_term(stop!(CoqTokenKind::Case))?;
                     self.advance();
-                    let term = self.parse_term(stop!(CoqTokenKind::Pipe, CoqTokenKind::Word(END.to_string())))?;
+                    let term = self.parse_term(stop!(
+                        CoqTokenKind::Pipe,
+                        CoqTokenKind::Word(END.to_string())
+                    ))?;
                     cases.push(MatchCase { pattern, term });
                 }
                 self.advance();
@@ -846,9 +848,7 @@ impl<'a> CoqParser<'a> {
             CoqTokenKind::Word(word) => match word.as_str() {
                 "forall" | "exists" | "exists!" => {
                     self.advance();
-                    let binder = Box::new(
-                        self.parse_open_binder(stop!(CoqTokenKind::Comma))?,
-                    );
+                    let binder = Box::new(self.parse_open_binder(stop!(CoqTokenKind::Comma))?);
                     self.advance();
                     return Ok(Box::new(Term::Quantifier(Quantifier {
                         token: word,
@@ -917,15 +917,13 @@ impl<'a> CoqParser<'a> {
                                 None
                             };
                             self.advance();
-                            Some((
-                                as_name,
-                                self.parse_term(stop!(CoqTokenKind::Define))?,
-                            ))
+                            Some((as_name, self.parse_term(stop!(CoqTokenKind::Define))?))
                         } else {
                             None
                         };
                         self.advance();
-                        let destruct = self.parse_term(stop!(CoqTokenKind::Word(IN.to_string())))?;
+                        let destruct =
+                            self.parse_term(stop!(CoqTokenKind::Word(IN.to_string())))?;
                         self.advance();
                         return Ok(Box::new(Term::LetIn(LetIn::DestructLetIn(DestructLetIn {
                             names,
@@ -938,8 +936,7 @@ impl<'a> CoqParser<'a> {
                 }
                 "fun" => {
                     self.advance();
-                    let binder =
-                        self.parse_open_binder(stop!(CoqTokenKind::Case))?;
+                    let binder = self.parse_open_binder(stop!(CoqTokenKind::Case))?;
                     self.advance();
                     return Ok(Box::new(Term::Function(Function {
                         binder,
@@ -967,7 +964,8 @@ impl<'a> CoqParser<'a> {
                     }
 
                     self.advance();
-                    let term = self.parse_term(stop!(CoqTokenKind::SemiColon, CoqTokenKind::Pipe))?;
+                    let term =
+                        self.parse_term(stop!(CoqTokenKind::SemiColon, CoqTokenKind::Pipe))?;
                     fields.push(RecordFieldTerm {
                         name,
                         binders,
@@ -1025,8 +1023,7 @@ impl<'a> CoqParser<'a> {
                 }
 
                 self.advance();
-                let typ =
-                    self.parse_term(stop!(CoqTokenKind::BracketRight))?;
+                let typ = self.parse_term(stop!(CoqTokenKind::BracketRight))?;
 
                 self.advance();
                 Ok(Binder::Explicit(ExplicitBinder { names, typ }))
@@ -1048,8 +1045,7 @@ impl<'a> CoqParser<'a> {
 
                 self.advance();
                 let typ = if seen_colon {
-                    let term = self
-                        .parse_term(stop!(CoqTokenKind::BracketCurlyRight))?;
+                    let term = self.parse_term(stop!(CoqTokenKind::BracketCurlyRight))?;
                     self.advance();
                     Some(term)
                 } else {
@@ -1119,11 +1115,7 @@ impl<'a> CoqParser<'a> {
         bail!(ParserError::UnexpectedToken(self.current()?.clone()));
     }
 
-    fn parse_assumption(
-        &mut self,
-        token: String,
-        stop: Stopper,
-    ) -> Result<Assumption> {
+    fn parse_assumption(&mut self, token: String, stop: Stopper) -> Result<Assumption> {
         let mut names = Vec::new();
         while self.current()?.kind != CoqTokenKind::Colon {
             names.push(self.parse_name()?);
@@ -1265,13 +1257,20 @@ impl<'a> CoqParser<'a> {
         }
         let typ = if self.current()?.kind == CoqTokenKind::Colon {
             self.advance();
-            Some(self.parse_term(stop!(CoqTokenKind::Define, CoqTokenKind::SemiColon, CoqTokenKind::BracketCurlyRight))?)
+            Some(self.parse_term(stop!(
+                CoqTokenKind::Define,
+                CoqTokenKind::SemiColon,
+                CoqTokenKind::BracketCurlyRight
+            ))?)
         } else {
             None
         };
         let term = if self.current()?.kind == CoqTokenKind::Define {
             self.advance();
-            Some(self.parse_term(stop!(CoqTokenKind::SemiColon, CoqTokenKind::BracketCurlyRight))?)
+            Some(self.parse_term(stop!(
+                CoqTokenKind::SemiColon,
+                CoqTokenKind::BracketCurlyRight
+            ))?)
         } else {
             None
         };
@@ -1437,7 +1436,10 @@ impl<'a> CoqParser<'a> {
         self.advance();
         let term = self.parse_term(stop!(CoqTokenKind::Colon))?;
         self.advance();
-        let typ = self.parse_term(stop!(CoqTokenKind::NewLine, CoqTokenKind::Word("Arguments".to_string())))?;
+        let typ = self.parse_term(stop!(
+            CoqTokenKind::NewLine,
+            CoqTokenKind::Word("Arguments".to_string())
+        ))?;
         Ok(PrintVariable { name, term, typ })
     }
 
@@ -1464,7 +1466,10 @@ impl<'a> CoqParser<'a> {
         }
         self.skip_whitespace = true;
         self.skip_line();
-        let conclusion = self.parse_term(stop!(CoqTokenKind::Word("goal".to_string()), CoqTokenKind::NewLine))?;
+        let conclusion = self.parse_term(stop!(
+            CoqTokenKind::Word("goal".to_string()),
+            CoqTokenKind::NewLine
+        ))?;
         Ok(Goal {
             premise,
             conclusion,
@@ -1478,7 +1483,10 @@ impl<'a> CoqParser<'a> {
 
         for _ in 1..number {
             self.skip_line();
-            let conclusion = self.parse_term(stop!(CoqTokenKind::Word("goal".to_string()), CoqTokenKind::NewLine))?;
+            let conclusion = self.parse_term(stop!(
+                CoqTokenKind::Word("goal".to_string()),
+                CoqTokenKind::NewLine
+            ))?;
             self.advance();
             goals.push(Goal {
                 premise: Vec::new(),
@@ -1506,10 +1514,9 @@ impl<'a> CoqParser<'a> {
                     | "Property" => Ok(CoqExpression::Theorem(self.parse_theorem(word)?)),
                     "Axiom" | "Axioms" | "Conjecture" | "Conjectures" | "Parameter"
                     | "Parameters" | "Hypothesis" | "Hypotheses" | "Variable" | "Variables" => {
-                        Ok(CoqExpression::Assumption(self.parse_assumption(
-                            word,
-                            stop!(CoqTokenKind::Dot),
-                        )?))
+                        Ok(CoqExpression::Assumption(
+                            self.parse_assumption(word, stop!(CoqTokenKind::Dot))?,
+                        ))
                     }
                     "Inductive" => Ok(CoqExpression::Inductive(self.parse_inductive()?)),
                     "Definition" | "Example" => {

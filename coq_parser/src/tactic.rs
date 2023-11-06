@@ -1,38 +1,75 @@
 use anyhow::{bail, Ok, Result};
 
-use crate::stop;
 use crate::lexer::{CoqToken, CoqTokenKind, CoqTokenSlice};
-use crate::parser::{Stopper, CoqParser, ParserError, Term, BasicTerm};
+use crate::parser::{BasicTerm, CoqParser, ParserError, Stopper, Term};
+use crate::stop;
+
+#[derive(Debug, PartialEq)]
+struct Binding {
+    name: String,
+    term: Box<Term>,
+}
+
+#[derive(Debug, PartialEq)]
+enum Bindings {
+    Simple(Vec<Box<BasicTerm>>),
+    Complex(Vec<Binding>),
+}
+
+#[derive(Debug, PartialEq)]
+struct BasicTermWithBindings {
+    term: Box<BasicTerm>,
+    bindings: Option<Bindings>,
+}
 
 #[derive(Debug, PartialEq)]
 struct AtomBinder {
-    name: String
+    name: String,
 }
 
 #[derive(Debug, PartialEq)]
 struct TypeBinder {
     names: Vec<String>,
-    typ: Box<Term>
+    typ: Box<Term>,
 }
 
 #[derive(Debug, PartialEq)]
 enum SimpleBinder {
     AtomBinder(AtomBinder),
-    TypeBinder(TypeBinder)
+    TypeBinder(TypeBinder),
 }
 
 #[derive(Debug, PartialEq)]
 struct AliasDefinition {
     name: String,
     binders: Vec<SimpleBinder>,
-    term: Box<Term>
+    term: Box<Term>,
+}
+
+#[derive(Debug, PartialEq)]
+struct ExactTactic {
+    token: String,
+    term: Box<BasicTerm>,
+}
+
+#[derive(Debug, PartialEq)]
+struct HypIntroPattern {
+    name: String,
+    pattern: Option<IntroPattern>,
+}
+
+#[derive(Debug, PartialEq)]
+struct ApplyTactic {
+    token: String,
+    terms: Vec<BasicTermWithBindings>,
+    in_hyp: Option<Vec<HypIntroPattern>>,
 }
 
 #[derive(Debug, PartialEq)]
 enum EqualityIntroPattern {
     Arrow,
     BackArrow,
-    Equality(Vec<IntroPattern>)
+    Equality(Vec<IntroPattern>),
 }
 
 #[derive(Debug, PartialEq)]
@@ -41,19 +78,19 @@ enum IntroPattern {
     DoubleStar,
     Equality(EqualityIntroPattern),
     OrAnd(Vec<IntroPattern>),
-    Named(String)
+    Named(String),
 }
 
 #[derive(Debug, PartialEq)]
 struct IntrosTactic {
     token: String,
-    patterns: Vec<IntroPattern>
+    patterns: Vec<IntroPattern>,
 }
 
 #[derive(Debug, PartialEq)]
 struct ClearTactic {
     inverse: bool,
-    names: Vec<String>
+    names: Vec<String>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -61,7 +98,7 @@ struct RememberTactic {
     token: String,
     term: Box<BasicTerm>,
     as_name: Option<String>,
-    eqn: Option<String>
+    eqn: Option<String>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -69,23 +106,35 @@ struct AssertTactic {
     token: String,
     name: String,
     typ: Box<Term>,
-    by: Option<Box<HighTactic>>
+    by: Option<Box<HighTactic>>,
 }
 
 #[derive(Debug, PartialEq)]
 struct PoseProofAssertTactic {
+    token: String,
     name: String,
-    term: Box<Term>
+    term: Box<Term>,
 }
 
 #[derive(Debug, PartialEq)]
 struct PoseProofExactTactic {
+    token: String,
     term: Box<Term>,
-    as_intro: Option<IntroPattern>
+    as_intro: Option<IntroPattern>,
+}
+
+#[derive(Debug, PartialEq)]
+struct SpecializeTactic {
+    term: BasicTermWithBindings,
+    as_intro: Option<IntroPattern>,
 }
 
 #[derive(Debug, PartialEq)]
 enum SimpleTactic {
+    Exact(ExactTactic),
+    Assumption(String),
+    Refine(Box<BasicTerm>),
+    Apply(ApplyTactic),
     Intro(String),
     Intros(IntrosTactic),
     Clear(ClearTactic),
@@ -93,7 +142,13 @@ enum SimpleTactic {
     Assert(AssertTactic),
     Cut(Box<BasicTerm>),
     PoseProofAssert(PoseProofAssertTactic),
-    PoseProofExact(PoseProofExactTactic)
+    PoseProofExact(PoseProofExactTactic),
+    Specialize(SpecializeTactic),
+    Generalize(Vec<Box<BasicTerm>>),
+    Absurd(Box<BasicTerm>),
+    Contradiction(Option<BasicTermWithBindings>),
+    Contradict(String),
+    Exfalso,
 }
 
 #[derive(Debug, PartialEq)]
@@ -237,12 +292,12 @@ enum BinderTactic {
 
 #[derive(Debug, PartialEq)]
 pub struct MainExpression {
-    tactic: Box<MainTactic>
+    tactic: Box<MainTactic>,
 }
 
 #[derive(Debug, PartialEq)]
 pub struct BinderExpression {
-    binder: Box<BinderTactic>
+    binder: Box<BinderTactic>,
 }
 
 #[derive(Debug, PartialEq)]
@@ -290,9 +345,9 @@ impl<'a> LtacParser<'a> {
         }
     }
 
-    fn parse_coq<T, F>(&mut self, fun: F) -> T 
+    fn parse_coq<T, F>(&mut self, fun: F) -> T
     where
-        F: FnOnce(&mut CoqParser) -> T
+        F: FnOnce(&mut CoqParser) -> T,
     {
         let mut slice = self.slice;
         slice.cut(self.index);
@@ -330,6 +385,17 @@ impl<'a> LtacParser<'a> {
         }
     }
 
+    fn check_binding(&mut self) -> Result<bool> {
+        let bracket = self.current()?.kind == CoqTokenKind::BracketLeft;
+        let name = match self.peek(1)?.kind {
+            CoqTokenKind::Word(_) => true,
+            CoqTokenKind::Underscore => true,
+            _ => false,
+        };
+        let define = self.peek(2)?.kind == CoqTokenKind::Define;
+        Ok(bracket && name && define)
+    }
+
     fn parse_let_clause(&mut self, stop: Stopper) -> Result<LetClause> {
         let ident = self.parse_name()?;
 
@@ -352,10 +418,16 @@ impl<'a> LtacParser<'a> {
         if rec {
             self.advance();
         }
-        let clause = self.parse_let_clause(stop!(CoqTokenKind::Word(IN.to_string()), CoqTokenKind::Word(WITH.to_string())))?;
+        let clause = self.parse_let_clause(stop!(
+            CoqTokenKind::Word(IN.to_string()),
+            CoqTokenKind::Word(WITH.to_string())
+        ))?;
         let mut with = Vec::new();
         while self.current()?.kind != CoqTokenKind::Word(IN.to_string()) {
-            with.push(self.parse_let_clause(stop!(CoqTokenKind::Word(IN.to_string()), CoqTokenKind::Word(WITH.to_string())))?);
+            with.push(self.parse_let_clause(stop!(
+                CoqTokenKind::Word(IN.to_string()),
+                CoqTokenKind::Word(WITH.to_string())
+            ))?);
         }
         Ok(Let {
             rec,
@@ -409,10 +481,7 @@ impl<'a> LtacParser<'a> {
         Ok(MatchTerm(self.parse_coq_term(stop)?))
     }
 
-    fn parse_match_pattern(
-        &mut self,
-        stop: Stopper,
-    ) -> Result<MatchPattern> {
+    fn parse_match_pattern(&mut self, stop: Stopper) -> Result<MatchPattern> {
         if self.current()?.kind == CoqTokenKind::Colon {
             self.advance();
             return Ok(MatchPattern::Type(self.parse_match_term(stop)?));
@@ -443,10 +512,7 @@ impl<'a> LtacParser<'a> {
         bail!(ParserError::UnexpectedToken(self.current()?.clone()))
     }
 
-    fn parse_match_hypothesis(
-        &mut self,
-        stop: Stopper,
-    ) -> Result<MatchHypothesis> {
+    fn parse_match_hypothesis(&mut self, stop: Stopper) -> Result<MatchHypothesis> {
         Ok(MatchHypothesis {
             name: self.parse_name()?,
             pattern: self.parse_match_pattern(stop)?,
@@ -469,29 +535,39 @@ impl<'a> LtacParser<'a> {
             if self.current()?.kind == CoqTokenKind::Pipe {
                 self.advance();
             }
-            let pattern = if self.current()?.kind == CoqTokenKind::Underscore {
-                None
-            } else {
-                if self.current()?.kind == CoqTokenKind::BracketSquareLeft {
-                    self.advance();
-                }
-
-                let mut hyp = Vec::new();
-                while self.current()?.kind != CoqTokenKind::Pipe {
-                    hyp.push(self.parse_match_hypothesis(stop!(CoqTokenKind::Comma, CoqTokenKind::Pipe))?);
-                    if self.current()?.kind == CoqTokenKind::Comma {
+            let pattern =
+                if self.current()?.kind == CoqTokenKind::Underscore {
+                    None
+                } else {
+                    if self.current()?.kind == CoqTokenKind::BracketSquareLeft {
                         self.advance();
                     }
-                }
 
-                self.advance();
-                self.advance();
-                let goal = self.parse_match_term(stop!(CoqTokenKind::Case, CoqTokenKind::BracketSquareRight))?;
-                Some(MatchGoalPattern { hyp, goal })
-            };
+                    let mut hyp = Vec::new();
+                    while self.current()?.kind != CoqTokenKind::Pipe {
+                        hyp.push(self.parse_match_hypothesis(stop!(
+                            CoqTokenKind::Comma,
+                            CoqTokenKind::Pipe
+                        ))?);
+                        if self.current()?.kind == CoqTokenKind::Comma {
+                            self.advance();
+                        }
+                    }
+
+                    self.advance();
+                    self.advance();
+                    let goal = self.parse_match_term(stop!(
+                        CoqTokenKind::Case,
+                        CoqTokenKind::BracketSquareRight
+                    ))?;
+                    Some(MatchGoalPattern { hyp, goal })
+                };
             cases.push(MatchCase {
                 pattern,
-                expr: self.parse_expression(stop!(CoqTokenKind::Word("end".to_string()), CoqTokenKind::Pipe))?
+                expr: self.parse_expression(stop!(
+                    CoqTokenKind::Word("end".to_string()),
+                    CoqTokenKind::Pipe
+                ))?,
             });
         }
 
@@ -502,7 +578,11 @@ impl<'a> LtacParser<'a> {
         })
     }
 
-    fn collect_intro_patterns(&mut self, skip: fn(&CoqTokenKind) -> bool, stop: fn(&CoqTokenKind) -> bool) -> Result<Vec<IntroPattern>> {
+    fn collect_intro_patterns(
+        &mut self,
+        skip: fn(&CoqTokenKind) -> bool,
+        stop: fn(&CoqTokenKind) -> bool,
+    ) -> Result<Vec<IntroPattern>> {
         let mut patterns = Vec::new();
         while !stop(&self.current()?.kind) {
             patterns.push(self.parse_intro_pattern()?);
@@ -531,24 +611,28 @@ impl<'a> LtacParser<'a> {
                     self.advance();
                     let patterns = self.collect_intro_patterns(|_| false, stop)?;
                     self.advance();
-                    Ok(IntroPattern::Equality(EqualityIntroPattern::Equality(patterns)))
+                    Ok(IntroPattern::Equality(EqualityIntroPattern::Equality(
+                        patterns,
+                    )))
                 } else {
-                    let patterns = self.collect_intro_patterns(|token: &_| token == &CoqTokenKind::Pipe, stop)?;
+                    let patterns = self
+                        .collect_intro_patterns(|token: &_| token == &CoqTokenKind::Pipe, stop)?;
                     self.advance();
                     Ok(IntroPattern::OrAnd(patterns))
                 }
             }
             CoqTokenKind::BracketLeft => {
                 self.advance();
-                let patterns = self.collect_intro_patterns(|token| token == &CoqTokenKind::Comma || token == &CoqTokenKind::Ampersand, |token| token == &CoqTokenKind::BracketRight)?;
+                let patterns = self.collect_intro_patterns(
+                    |token| token == &CoqTokenKind::Comma || token == &CoqTokenKind::Ampersand,
+                    |token| token == &CoqTokenKind::BracketRight,
+                )?;
                 self.advance();
                 Ok(IntroPattern::OrAnd(patterns))
             }
             CoqTokenKind::Arrow => Ok(IntroPattern::Equality(EqualityIntroPattern::Arrow)),
             CoqTokenKind::BackArrow => Ok(IntroPattern::Equality(EqualityIntroPattern::BackArrow)),
-            _ => {
-                Ok(IntroPattern::Named(self.parse_name()?))
-            }
+            _ => Ok(IntroPattern::Named(self.parse_name()?)),
         }
     }
 
@@ -573,8 +657,38 @@ impl<'a> LtacParser<'a> {
             self.advance();
             Ok(SimpleBinder::TypeBinder(TypeBinder { names, typ }))
         } else {
-            Ok(SimpleBinder::AtomBinder(AtomBinder { name: self.parse_name()? }))
+            Ok(SimpleBinder::AtomBinder(AtomBinder {
+                name: self.parse_name()?,
+            }))
         }
+    }
+
+    fn parse_basic_term_with_bindings(&mut self, stop: Stopper) -> Result<BasicTermWithBindings> {
+        let term = self.parse_coq_basic_term()?;
+        let bindings = if self.current()?.kind == CoqTokenKind::Word("with".to_string()) {
+            let bindings = if self.check_binding()? {
+                let mut bindings = Vec::new();
+                while !stop.check(&self.current()?.kind) {
+                    self.advance();
+                    let name = self.parse_name()?;
+                    self.advance();
+                    let term = self.parse_coq_term(stop!(CoqTokenKind::BracketRight))?;
+                    self.advance();
+                    bindings.push(Binding { name, term })
+                }
+                Bindings::Complex(bindings)
+            } else {
+                let mut bindings = Vec::new();
+                while !stop.check(&self.current()?.kind) {
+                    bindings.push(self.parse_coq_basic_term()?);
+                }
+                Bindings::Simple(bindings)
+            };
+            Some(bindings)
+        } else {
+            None
+        };
+        Ok(BasicTermWithBindings { term, bindings })
     }
 
     fn parse_alias_definition(&mut self) -> Result<AliasDefinition> {
@@ -592,12 +706,74 @@ impl<'a> LtacParser<'a> {
         self.advance();
         let term = self.parse_coq_term(stop!(CoqTokenKind::BracketRight))?;
         self.advance();
-        Ok(AliasDefinition { name, binders, term })
+        Ok(AliasDefinition {
+            name,
+            binders,
+            term,
+        })
     }
 
     fn parse_simple_tactic(&mut self, stop: Stopper) -> Result<Option<Box<SimpleTactic>>> {
         if let CoqTokenKind::Word(word) = &self.current()?.kind {
             match word.as_str() {
+                "exact" | "eexact" => {
+                    let token = word.clone();
+                    self.advance();
+                    Ok(Some(Box::new(SimpleTactic::Exact(ExactTactic {
+                        token,
+                        term: self.parse_coq_basic_term()?,
+                    }))))
+                }
+                "assumption" | "eassumption" => {
+                    let token = word.clone();
+                    self.advance();
+                    Ok(Some(Box::new(SimpleTactic::Assumption(token))))
+                }
+                "refine" => {
+                    self.advance();
+                    Ok(Some(Box::new(SimpleTactic::Refine(
+                        self.parse_coq_basic_term()?,
+                    ))))
+                }
+                "apply" => {
+                    let token = word.clone();
+                    self.advance();
+                    let mut in_stop = stop.clone();
+                    in_stop = in_stop.add(CoqTokenKind::Word("in".to_string()));
+
+                    let mut terms = Vec::new();
+                    while in_stop.check(&self.current()?.kind) {
+                        let term_stop = in_stop.clone();
+                        terms.push(
+                            self.parse_basic_term_with_bindings(
+                                term_stop.add(CoqTokenKind::Comma),
+                            )?,
+                        );
+                        if self.current()?.kind == CoqTokenKind::Comma {
+                            self.advance();
+                        }
+                    }
+
+                    let in_hyp = if self.current()?.kind == CoqTokenKind::Word("in".to_string()) {
+                        self.advance();
+                        let mut patterns = Vec::new();
+                        while !stop.check(&self.current()?.kind) {
+                            patterns.push(HypIntroPattern {
+                                name: self.parse_name()?,
+                                pattern: self.parse_as_intro_pattern()?,
+                            });
+                        }
+                        Some(patterns)
+                    } else {
+                        None
+                    };
+
+                    Ok(Some(Box::new(SimpleTactic::Apply(ApplyTactic {
+                        token,
+                        terms,
+                        in_hyp,
+                    }))))
+                }
                 "intro" => {
                     self.advance();
                     Ok(Some(Box::new(SimpleTactic::Intro(self.parse_name()?))))
@@ -609,7 +785,10 @@ impl<'a> LtacParser<'a> {
                     while !stop.check(&self.current()?.kind) {
                         patterns.push(self.parse_intro_pattern()?);
                     }
-                    Ok(Some(Box::new(SimpleTactic::Intros(IntrosTactic { token, patterns} ))))                    
+                    Ok(Some(Box::new(SimpleTactic::Intros(IntrosTactic {
+                        token,
+                        patterns,
+                    }))))
                 }
                 "clear" => {
                     self.advance();
@@ -623,13 +802,16 @@ impl<'a> LtacParser<'a> {
                     while !stop.check(&self.current()?.kind) {
                         names.push(self.parse_name()?);
                     }
-                    Ok(Some(Box::new(SimpleTactic::Clear(ClearTactic {inverse, names }))))
+                    Ok(Some(Box::new(SimpleTactic::Clear(ClearTactic {
+                        inverse,
+                        names,
+                    }))))
                 }
                 "remember" | "eremember" => {
                     let token = word.clone();
                     self.advance();
                     let term = self.parse_coq_basic_term()?;
-                    let as_name = self.parse_as_name()?;                    
+                    let as_name = self.parse_as_name()?;
                     let eqn = if self.current()?.kind == CoqTokenKind::Word("eqn".to_string()) {
                         self.advance();
                         self.advance();
@@ -637,7 +819,12 @@ impl<'a> LtacParser<'a> {
                     } else {
                         None
                     };
-                    Ok(Some(Box::new(SimpleTactic::Remember(RememberTactic {token, term, as_name, eqn }))))
+                    Ok(Some(Box::new(SimpleTactic::Remember(RememberTactic {
+                        token,
+                        term,
+                        as_name,
+                        eqn,
+                    }))))
                 }
                 "assert" | "eassert" | "enough" | "eenough" => {
                     let token = word.clone();
@@ -656,7 +843,12 @@ impl<'a> LtacParser<'a> {
                     } else {
                         None
                     };
-                    Ok(Some(Box::new(SimpleTactic::Assert(AssertTactic { token, name, typ, by }))))
+                    Ok(Some(Box::new(SimpleTactic::Assert(AssertTactic {
+                        token,
+                        name,
+                        typ,
+                        by,
+                    }))))
                 }
                 "cut" => {
                     self.advance();
@@ -673,29 +865,79 @@ impl<'a> LtacParser<'a> {
                             let name = self.parse_name()?;
                             self.advance();
                             let term = self.parse_coq_term(stop!(CoqTokenKind::BracketRight))?;
-                            SimpleTactic::PoseProofAssert(PoseProofAssertTactic { name, term })                            
+                            SimpleTactic::PoseProofAssert(PoseProofAssertTactic {
+                                token,
+                                name,
+                                term,
+                            })
                         } else {
                             let term_stop = stop.clone();
-                            let term = self.parse_coq_term(term_stop.add(CoqTokenKind::Word("as".to_string())))?;
+                            let term = self.parse_coq_term(
+                                term_stop.add(CoqTokenKind::Word("as".to_string())),
+                            )?;
                             let as_intro = self.parse_as_intro_pattern()?;
-                            SimpleTactic::PoseProofExact(PoseProofExactTactic { term, as_intro })
+                            SimpleTactic::PoseProofExact(PoseProofExactTactic {
+                                token,
+                                term,
+                                as_intro,
+                            })
                         };
                         Ok(Some(Box::new(tactic)))
                     } else {
                         bail!(ParserError::UnexpectedToken(self.current()?.clone()))
                     }
                 }
-                _ => Ok(None)
+                "specialize" => {
+                    self.advance();
+                    let term_stop = stop.clone();
+                    let term = self.parse_basic_term_with_bindings(
+                        term_stop.add(CoqTokenKind::Word("as".to_string())),
+                    )?;
+                    let as_intro = self.parse_as_intro_pattern()?;
+                    Ok(Some(Box::new(SimpleTactic::Specialize(SpecializeTactic {
+                        term,
+                        as_intro,
+                    }))))
+                }
+                "generalize" => {
+                    self.advance();
+                    let mut terms = Vec::new();
+                    while !stop.check(&self.current()?.kind) {
+                        terms.push(self.parse_coq_basic_term()?);
+                    }
+                    Ok(Some(Box::new(SimpleTactic::Generalize(terms))))
+                }
+                "absurd" => {
+                    self.advance();
+                    Ok(Some(Box::new(SimpleTactic::Absurd(
+                        self.parse_coq_basic_term()?,
+                    ))))
+                }
+                "contradiction" => {
+                    self.advance();
+                    let term = if stop.check(&self.current()?.kind) {
+                        None
+                    } else {
+                        Some(self.parse_basic_term_with_bindings(stop)?)
+                    };
+                    Ok(Some(Box::new(SimpleTactic::Contradiction(term))))
+                }
+                "contradict" => {
+                    self.advance();
+                    Ok(Some(Box::new(SimpleTactic::Contradict(self.parse_name()?))))
+                }
+                "exfalso" => {
+                    self.advance();
+                    Ok(Some(Box::new(SimpleTactic::Exfalso)))
+                }
+                _ => Ok(None),
             }
         } else {
             Ok(None)
         }
     }
 
-    fn parse_low_tactic(
-        &mut self,
-        stop: Stopper,
-    ) -> Result<Box<LowTactic>> {
+    fn parse_low_tactic(&mut self, stop: Stopper) -> Result<Box<LowTactic>> {
         if self.current()?.kind == CoqTokenKind::BracketLeft {
             let expr = self.parse_expression(stop!(CoqTokenKind::BracketRight))?;
             self.advance();
@@ -713,15 +955,13 @@ impl<'a> LtacParser<'a> {
         Ok(Box::new(LowTactic::Term(self.parse_coq_term(stop)?)))
     }
 
-    fn parse_middle_tactic(
-        &mut self,
-        stop: Stopper,
-    ) -> Result<Box<MiddleTactic>> {
+    fn parse_middle_tactic(&mut self, stop: Stopper) -> Result<Box<MiddleTactic>> {
         if self.current()?.kind == CoqTokenKind::Word("tryif".to_string()) {
             return Ok(Box::new(MiddleTactic::TryIf(self.parse_tryif(stop)?)));
         }
         let tactic_stop = stop.clone();
-        let tactic = self.parse_low_tactic(tactic_stop.add(CoqTokenKind::Pipe).add(CoqTokenKind::Plus))?;
+        let tactic =
+            self.parse_low_tactic(tactic_stop.add(CoqTokenKind::Pipe).add(CoqTokenKind::Plus))?;
         if self.current()?.kind == CoqTokenKind::Pipe {
             self.advance();
             self.advance();
@@ -746,10 +986,7 @@ impl<'a> LtacParser<'a> {
         Ok(Box::new(MiddleTactic::Simple(tactic)))
     }
 
-    fn parse_high_tactic(
-        &mut self,
-        stop: Stopper,
-    ) -> Result<Box<HighTactic>> {
+    fn parse_high_tactic(&mut self, stop: Stopper) -> Result<Box<HighTactic>> {
         if let CoqTokenKind::Word(word) = &self.current()?.kind {
             match word.as_str() {
                 "try" => {
@@ -790,7 +1027,10 @@ impl<'a> LtacParser<'a> {
                 self.advance();
                 self.advance();
             } else {
-                tactics.push(self.parse_expression(stop!(CoqTokenKind::BracketSquareRight, CoqTokenKind::Pipe))?);
+                tactics.push(self.parse_expression(stop!(
+                    CoqTokenKind::BracketSquareRight,
+                    CoqTokenKind::Pipe
+                ))?);
             }
             if self.current()?.kind == CoqTokenKind::Pipe {
                 self.advance();
@@ -836,11 +1076,13 @@ impl<'a> LtacParser<'a> {
 
     fn parse_expression(&mut self, stop: Stopper) -> Result<Box<LtacExpression>> {
         if let Some(binder) = self.parse_binder(stop.clone())? {
-            Ok(Box::new(LtacExpression::Binder(BinderExpression { binder })))
+            Ok(Box::new(LtacExpression::Binder(BinderExpression {
+                binder,
+            })))
         } else {
-            Ok(Box::new(LtacExpression::Simple(
-                MainExpression { tactic: self.parse_main_tactic(stop)? },
-            )))
+            Ok(Box::new(LtacExpression::Simple(MainExpression {
+                tactic: self.parse_main_tactic(stop)?,
+            })))
         }
     }
 }
@@ -863,7 +1105,7 @@ mod tests {
         println!("{:?}", expr);
     }
 
-    #[test] 
+    #[test]
     fn intros() {
         check("intros * [a | (_,c)] f.");
     }
