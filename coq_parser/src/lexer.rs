@@ -1,8 +1,8 @@
 use anyhow::{bail, Result};
-use std::ops::{Index, RangeFrom};
+use std::ops::Index;
 use std::str::Chars;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Hash, Eq)]
 pub enum CoqTokenKind {
     Dot,
     Comma,
@@ -36,6 +36,7 @@ pub enum CoqTokenKind {
     Question,
     Underscore,
     Percent,
+    Ampersand,
     NewLine,
     Word(String),
 }
@@ -75,6 +76,7 @@ impl std::fmt::Display for CoqTokenKind {
             Self::Question => "?",
             Self::Underscore => "_",
             Self::Percent => "%",
+            Self::Ampersand => "&",
             Self::NewLine => "",
             Self::Word(s) => s,
         };
@@ -267,6 +269,7 @@ fn get_next_token(data: &str) -> Result<(CoqTokenKind, usize)> {
         '~' => (CoqTokenKind::Not, 1),
         '|' => (CoqTokenKind::Pipe, 1),
         '%' => (CoqTokenKind::Percent, 1),
+        '&' => (CoqTokenKind::Ampersand, 1),
         _ => tokenize_word(data)?,
     };
     Ok(result)
