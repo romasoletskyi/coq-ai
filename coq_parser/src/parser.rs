@@ -2,7 +2,7 @@ use anyhow::{bail, Ok, Result};
 use std::{collections::HashSet, fmt::Display};
 
 use crate::lexer::{CoqToken, CoqTokenKind, CoqTokenSlice};
-use crate::tactic::{AS, IN, ELSE, END, STRUCT, THEN, WITH};
+use crate::tactic::{AS, ELSE, END, IN, STRUCT, THEN, WITH};
 
 #[derive(Debug, Clone)]
 pub(crate) struct Stopper {
@@ -602,7 +602,7 @@ impl Display for FixAnnotation {
 
 #[derive(Debug, PartialEq)]
 pub struct Fixpoint {
-    name: String,
+    pub name: String,
     binders: Vec<Binder>,
     annotation: Option<FixAnnotation>,
     typ: Option<Box<Term>>,
@@ -680,6 +680,7 @@ pub enum CoqExpression {
     Fixpoint(Fixpoint),
     PrintVariable(PrintVariable),
     Tactic(Vec<CoqToken>),
+    Import(Vec<CoqToken>),
     Goal(Vec<Goal>),
     SectionStart(String),
     SectionEnd(String),
@@ -722,6 +723,9 @@ impl Display for CoqExpression {
             CoqExpression::From => write!(f, "From"),
             CoqExpression::Set => write!(f, "Set"),
             CoqExpression::Unset => write!(f, "Unset"),
+            CoqExpression::Import(line) => {
+                write!(f, "{}", CoqTokenSlice::from(line.as_slice()))
+            }
         }
     }
 }
@@ -792,10 +796,7 @@ impl<'a> CoqParser<'a> {
                     self.advance();
                     let pattern = self.parse_term(stop!(CoqTokenKind::Case))?;
                     self.advance();
-                    let term = self.parse_term(stop!(
-                        &CoqTokenKind::Pipe,
-                        *END
-                    ))?;
+                    let term = self.parse_term(stop!(&CoqTokenKind::Pipe, *END))?;
                     cases.push(MatchCase { pattern, term });
                 }
                 self.advance();
@@ -909,8 +910,7 @@ impl<'a> CoqParser<'a> {
                             None
                         };
                         self.advance();
-                        let destruct =
-                            self.parse_term(stop!(*IN))?;
+                        let destruct = self.parse_term(stop!(*IN))?;
                         self.advance();
                         return Ok(Box::new(Term::LetIn(LetIn::DestructLetIn(DestructLetIn {
                             names,
@@ -1521,6 +1521,7 @@ impl<'a> CoqParser<'a> {
                         self.advance();
                         Ok(CoqExpression::SectionEnd(self.parse_name()?))
                     }
+                    "Require" | "Import" => Ok(CoqExpression::Import(self.slice.into())),
                     "Proof" => Ok(CoqExpression::Proof),
                     "Qed" => Ok(CoqExpression::Qed),
                     "From" => Ok(CoqExpression::From),

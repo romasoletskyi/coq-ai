@@ -1,26 +1,29 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
 use std::hash::Hash;
+use std::io::Write;
 
 use anyhow::{bail, Ok, Result};
 use rexpect::session::PtySession;
 use rexpect::spawn;
 
 use crate::lexer::{tokenize, CoqToken, CoqTokenKind, CoqTokenSlice};
-use crate::parser::{get_names, parse, parse_early, CoqExpression};
+use crate::parser;
+use crate::parser::{get_names, parse_early, CoqExpression};
 use crate::project::{prepare_program, CoqProject};
+use crate::tactic;
 
 static COQ_REGEX: &str = "\r\n[^< ]+ < ";
 
 #[derive(Debug)]
 enum InteractError {
-    UnexpectedPhrase,
+    UnexpectedPhrase(CoqToken),
 }
 
 impl Display for InteractError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self {
-            InteractError::UnexpectedPhrase => write!(f, "InteractError: unexpected phrase"),
+            InteractError::UnexpectedPhrase(token) => write!(f, "InteractError: unexpected phrase at {}", token),
         }
     }
 }
@@ -295,23 +298,26 @@ impl CoqContext {
         process: &mut PtySession,
         expression: &CoqExpression,
     ) -> Result<Vec<Name>> {
-        let mut names = get_names(expression);
+        let mut names = VecDeque::new();
+        for name in get_names(expression) {
+            names.push_back(name);
+        }
         let depend = names.iter().map(|x| Name(x.clone())).collect();
         while !names.is_empty() {
-            let name = Name(names.pop().unwrap());
+            let name = Name(names.pop_front().unwrap());
             if !self.contains_name(&name) {
                 let (answer, answer_tokens) = Self::check_name(process, &name)?;
                 let body = DefinitionBody(answer.clone());
                 if !self.contains_definition(&body) {
                     let tokens = CoqTokenSlice::from(answer_tokens.as_slice());
-                    let expr = parse(tokens)?;
+                    let expr = parser::parse(tokens)?;
                     if let CoqExpression::Tactic(_) = &expr {
-                        bail!(InteractError::UnexpectedPhrase);
+                        bail!(InteractError::UnexpectedPhrase(tokens[0].clone()));
                     }
                     let mut depend = Vec::new();
                     for s in get_names(&expr) {
                         depend.push(Name(s.clone()));
-                        names.push(s);
+                        names.push_back(s);
                     }
                     self.store(name, Definition { body, depend })
                 }
@@ -324,9 +330,9 @@ impl CoqContext {
     fn add(&mut self, process: &mut PtySession, name: &str) -> Result<()> {
         let stored_name = Name(name.to_string());
         let (answer, answer_tokens) = Self::check_name(process, &stored_name)?;
-        let expr = parse(CoqTokenSlice::from(answer_tokens.as_slice()))?;
+        let expr = parser::parse(CoqTokenSlice::from(answer_tokens.as_slice()))?;
         if let CoqExpression::Tactic(_) = &expr {
-            bail!(InteractError::UnexpectedPhrase);
+            bail!(InteractError::UnexpectedPhrase(answer_tokens[0].clone()));
         }
 
         let depend = self.unfold(process, &expr)?;
@@ -374,7 +380,7 @@ impl State {
     }
 
     fn definitions(&mut self, context: &CoqContext) -> &mut Self {
-        for (index, _) in &context.register {
+    for (index, _) in context.register.iter().rev() {
             self.definitions
                 .push(context.get_definition(index).unwrap().body.0.clone())
         }
@@ -427,7 +433,7 @@ fn init_process(project: &CoqProject) -> Result<PtySession> {
     Ok(process)
 }
 
-pub fn run_file(project: &CoqProject, data: &str) -> Result<()> {
+pub fn run_file(project: &CoqProject, data: &str, writer: &mut std::fs::File) -> Result<()> {
     let data_tokens = tokenize(data)?;
     let mut process = init_process(project)?;
     let mut phraser = CoqPhraser::new(data, CoqTokenSlice::from(data_tokens.as_slice()));
@@ -442,12 +448,12 @@ pub fn run_file(project: &CoqProject, data: &str) -> Result<()> {
         let answer = tokenize(&raw_answer)?;
         let expression = match phrase {
             CoqPhrase::Phrase(query) => parse_early(query)?,
-            _ => bail!(InteractError::UnexpectedPhrase),
+            _ => bail!(InteractError::UnexpectedPhrase(answer[0].clone())),
         };
 
         match &expression {
             CoqExpression::Theorem(_) => {
-                let goal = parse(CoqTokenSlice::from(answer.as_slice()))?;
+                let goal = parser::parse(CoqTokenSlice::from(answer.as_slice()))?;
                 context.open_section();
                 context.unfold(&mut process, &goal)?;
 
@@ -457,7 +463,7 @@ pub fn run_file(project: &CoqProject, data: &str) -> Result<()> {
                     .premise(&raw_phrase)
                     .goal(&raw_answer)
                     .tactic("Proof.");
-                println!("{}", state);
+                writeln!(writer, "{}", state).unwrap();
 
                 phraser.advance(&mut process)?.expect("expected Proof.");
                 let mut previous_goal = String::new();
@@ -470,8 +476,13 @@ pub fn run_file(project: &CoqProject, data: &str) -> Result<()> {
                 }) = phraser.advance(&mut process)?
                 {
                     if let CoqPhrase::Phrase(query) = phrase {
-                        if parse(query)? == CoqExpression::Qed {
-                            break;
+                        match parser::parse(query)? {
+                            CoqExpression::Qed => break,
+                            CoqExpression::Tactic(query) => {
+                                //let tactic = tactic::parse(CoqTokenSlice::from(query.as_slice()))?;
+                                //println!("{:?}", tactic);
+                            }
+                            _ => bail!(InteractError::UnexpectedPhrase(query[0].clone())),
                         }
                     }
 
@@ -481,7 +492,7 @@ pub fn run_file(project: &CoqProject, data: &str) -> Result<()> {
                         .goal(&previous_goal)
                         .tactic(&raw_phrase);
                     previous_goal = raw_answer.trim().to_string();
-                    println!("{}", state);
+                    writeln!(writer, "{}", state).unwrap();
                 }
                 unset_notation(&mut process)?;
                 context.close_section();
@@ -493,10 +504,11 @@ pub fn run_file(project: &CoqProject, data: &str) -> Result<()> {
             }
             CoqExpression::Inductive(inductive) => context.add(&mut process, &inductive.name)?,
             CoqExpression::Definition(definition) => context.add(&mut process, &definition.name)?,
+            CoqExpression::Fixpoint(fixpoint) => context.add(&mut process, &fixpoint.name)?,
             CoqExpression::SectionStart(_) => context.open_section(),
             CoqExpression::SectionEnd(_) => context.close_section(),
-            CoqExpression::From | CoqExpression::Set | CoqExpression::Unset => {}
-            _ => bail!(InteractError::UnexpectedPhrase),
+            CoqExpression::From | CoqExpression::Set | CoqExpression::Unset | CoqExpression::Import(_) => {}
+            _ => bail!(InteractError::UnexpectedPhrase(answer[0].clone())),
         }
     }
 

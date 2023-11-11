@@ -319,7 +319,12 @@ impl<'a> CoqTokenSlice<'a> {
         self.0.len()
     }
 
-    pub fn cut(&mut self, index: usize) -> CoqTokenSlice<'a> {
+    pub fn cut(&mut self, mut index: usize) -> CoqTokenSlice<'a> {
+        index = if index > self.0.len() {
+            self.0.len()
+        } else {
+            index
+        };
         let part = CoqTokenSlice(&self.0[..index]);
         self.0 = &self.0[index..];
         part
@@ -447,6 +452,14 @@ mod tests {
           exists C':Family X,
             Finite C' /\\ Included C' C /\\
             FamilyUnion C' = Full_set. ",
+        );
+        println!("{:?}", tokens);
+    }
+
+    #[test]
+    fn lemma() {
+        let tokens = tokenize(
+            "Lemma firstn_app_skipn: forall (n: nat) (p: pile), p = (firstn n p) ++ (skipn n p)."
         );
         println!("{:?}", tokens);
     }

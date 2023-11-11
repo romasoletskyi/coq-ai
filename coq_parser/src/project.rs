@@ -1,7 +1,8 @@
 use anyhow::{bail, Ok, Result};
-use std::fs::File;
+use std::fs::{File, FileType};
 use std::io::{BufRead, BufReader};
 use std::{fmt, vec::Vec};
+use walkdir::{WalkDir, DirEntry};
 
 #[derive(Debug)]
 struct ModuleArg {
@@ -21,7 +22,7 @@ pub struct CoqProject {
 }
 
 impl CoqProject {
-    fn new() -> Self {
+    pub fn new() -> Self {
         CoqProject {
             args: Vec::new(),
             files: Vec::new(),
@@ -56,11 +57,9 @@ fn parse_arg(line: &str, path: &str) -> Result<ModuleArg> {
     })
 }
 
-pub fn read_project(path: &str) -> Result<CoqProject> {
+fn read_project_file(path: &str, file: File) -> Result<CoqProject> {
     let mut project = CoqProject::new();
-    let file = File::open(path.to_owned() + PROJECT_FILE)?;
     let reader = BufReader::new(file);
-
     for line_result in reader.lines() {
         let line_check = line_result?;
         let line = line_check.trim();
@@ -71,8 +70,29 @@ pub fn read_project(path: &str) -> Result<CoqProject> {
             project.files.push(path.to_owned() + line);
         }
     }
-
     Ok(project)
+}
+
+fn read_simple_project(path: &str) -> Result<CoqProject> {
+    let mut project = CoqProject::new();
+    for entry in WalkDir::new(path) {
+        let entry = entry?;
+        let path = entry.path();
+        if let Some(ext) = path.extension() {
+            if ext.to_str().unwrap() == "v" {
+                project.files.push(path.to_str().unwrap().to_string())
+            }
+        }
+    }
+    Ok(project)
+}
+
+pub fn read_project(path: &str) -> Result<CoqProject> {
+    if let std::result::Result::Ok(file) = File::open(path.to_owned() + PROJECT_FILE) {
+        read_project_file(path, file)
+    } else {
+        read_simple_project(path)
+    }
 }
 
 pub(crate) fn prepare_program(project: &CoqProject) -> String {
