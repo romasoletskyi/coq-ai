@@ -11,13 +11,20 @@ pub struct Prover {
 
 impl Prover {
     fn new() -> Self {
-        Prover { hyp: HashMap::new(), imp: HashMap::new(), index: 0 }
+        Prover {
+            hyp: HashMap::new(),
+            imp: HashMap::new(),
+            index: 0,
+        }
     }
 
     fn store(&mut self, expr: Rc<Expression>) {
         if *self.hyp.entry(expr.clone()).or_insert_with(|| self.index) == self.index {
             if let Expression::Implication(implication) = &*expr {
-                self.imp.entry(implication.left.clone()).or_default().push(implication.right.clone());
+                self.imp
+                    .entry(implication.left.clone())
+                    .or_default()
+                    .push(implication.right.clone());
             }
             self.index += 1;
         }
@@ -76,7 +83,7 @@ mod tests {
         let tokens = tokenize(data).unwrap();
         let expr = parse(tokens.as_slice()).unwrap();
         let prover = analyze(expr);
-        
+
         for (expr, index) in prover.hyp {
             println!("{}: {}", index, expr);
         }
@@ -92,6 +99,7 @@ mod tests {
         check(
             "(P -> Q) -> (P -> R) -> (T -> R) ->
             (S -> T ->  U) -> ((P -> Q) -> (P -> S)) ->
-            T -> P -> Z");
+            T -> P -> Z",
+        );
     }
 }
