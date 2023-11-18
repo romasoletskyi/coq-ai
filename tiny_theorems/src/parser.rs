@@ -1,36 +1,36 @@
-use anyhow::{Result, bail};
-use std::{str::Chars, fmt::Display};
+use anyhow::{bail, Result};
+use std::{fmt::Display, rc::Rc, str::Chars};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum TokenKind {
     Symbol(char),
     Arrow,
     LeftBracket,
-    RightBracket
+    RightBracket,
 }
 
 pub struct Token {
     kind: TokenKind,
     start: usize,
-    end: usize
+    end: usize,
 }
 
 struct Lexer<'a> {
     data: &'a str,
-    index: usize
+    index: usize,
 }
 
 #[derive(Debug)]
 enum LexerError {
     Eof,
-    UnexpectedSymbol(char)
+    UnexpectedSymbol(char),
 }
 
 impl Display for LexerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             LexerError::Eof => write!(f, "EOF"),
-            LexerError::UnexpectedSymbol(c) => write!(f, "Unexpected symbol {}", c)
+            LexerError::UnexpectedSymbol(c) => write!(f, "Unexpected symbol {}", c),
         }
     }
 }
@@ -55,13 +55,13 @@ fn get_next_token(data: &str) -> Result<(TokenKind, usize)> {
         }
         '(' => Ok((TokenKind::LeftBracket, 1)),
         ')' => Ok((TokenKind::RightBracket, 1)),
-        c => Ok((TokenKind::Symbol(c), 1))
+        c => Ok((TokenKind::Symbol(c), 1)),
     }
 }
 
 impl<'a> Lexer<'a> {
     fn new(data: &'a str) -> Self {
-        Lexer { data, index: 0}
+        Lexer { data, index: 0 }
     }
 
     fn chomp(&mut self, size: usize) {
@@ -88,7 +88,11 @@ impl<'a> Lexer<'a> {
         } else {
             let (kind, size) = get_next_token(self.data)?;
             self.chomp(size);
-            Ok(Some(Token { kind, start: self.index - size, end: self.index }))
+            Ok(Some(Token {
+                kind,
+                start: self.index - size,
+                end: self.index,
+            }))
         }
     }
 }
@@ -102,7 +106,7 @@ pub fn tokenize(data: &str) -> Result<Vec<Token>> {
     Ok(tokens)
 }
 
-/*  
+/*
     Grammar rules are
     expr = basic | basic -> expr
     basic = char | ( expr )
@@ -110,15 +114,15 @@ pub fn tokenize(data: &str) -> Result<Vec<Token>> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Implication {
-    pub left: Box<Expression>,
-    pub right: Box<Expression>
+    pub left: Rc<Expression>,
+    pub right: Rc<Expression>,
 }
 
 impl Display for Implication {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &*self.left {
             Expression::Basic(c) => write!(f, "{}", c),
-            Expression::Implication(implication) => write!(f, "({})", implication)
+            Expression::Implication(implication) => write!(f, "({})", implication),
         }?;
         write!(f, " -> {}", self.right)
     }
@@ -127,26 +131,26 @@ impl Display for Implication {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Expression {
     Implication(Implication),
-    Basic(char)
+    Basic(char),
 }
 
 impl Display for Expression {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Expression::Implication(implication) => write!(f, "{}", implication),
-            Expression::Basic(c) => write!(f, "{}", c)
+            Expression::Basic(c) => write!(f, "{}", c),
         }
     }
 }
 
 struct Parser<'a> {
     tokens: &'a [Token],
-    index: usize
+    index: usize,
 }
 
-impl <'a> Parser<'a> {
+impl<'a> Parser<'a> {
     fn new(tokens: &'a [Token]) -> Self {
-        Parser { tokens, index: 0}
+        Parser { tokens, index: 0 }
     }
 
     fn current(&self) -> Result<TokenKind> {
@@ -161,7 +165,7 @@ impl <'a> Parser<'a> {
         self.index += 1;
     }
 
-    fn parse_basic(&mut self) -> Result<Box<Expression>> {
+    fn parse_basic(&mut self) -> Result<Rc<Expression>> {
         match self.current()? {
             TokenKind::LeftBracket => {
                 self.advance();
@@ -171,31 +175,34 @@ impl <'a> Parser<'a> {
             }
             TokenKind::Symbol(c) => {
                 self.advance();
-                Ok(Box::new(Expression::Basic(c)))
+                Ok(Rc::new(Expression::Basic(c)))
             }
             TokenKind::RightBracket => bail!(LexerError::UnexpectedSymbol(')')),
-            TokenKind::Arrow => bail!(LexerError::UnexpectedSymbol('-'))
+            TokenKind::Arrow => bail!(LexerError::UnexpectedSymbol('-')),
         }
     }
 
-    fn parse(&mut self) -> Result<Box<Expression>> {
+    fn parse(&mut self) -> Result<Rc<Expression>> {
         let left = self.parse_basic()?;
         if let Ok(TokenKind::Arrow) = self.current() {
             self.advance();
-            Ok(Box::new(Expression::Implication(Implication{ left, right: self.parse()? })))
+            Ok(Rc::new(Expression::Implication(Implication {
+                left,
+                right: self.parse()?,
+            })))
         } else {
             Ok(left)
         }
     }
 }
 
-pub fn parse(tokens: &[Token]) -> Result<Box<Expression>> {
+pub fn parse(tokens: &[Token]) -> Result<Rc<Expression>> {
     Parser::new(tokens).parse()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{tokenize, parse};
+    use super::{parse, tokenize};
 
     fn check(data: &str) {
         let tokens = tokenize(data).unwrap();
@@ -203,7 +210,7 @@ mod tests {
         println!("{:?}", expr);
         println!("{}", expr);
     }
-    
+
     #[test]
     fn simple() {
         check("P -> Q");
@@ -214,6 +221,7 @@ mod tests {
         check(
             "(P -> Q) -> (P -> R) -> (T -> R) ->
             (S -> T ->  U) -> ((P -> Q) -> (P -> S)) ->
-            T -> P");
+            T -> P",
+        );
     }
 }

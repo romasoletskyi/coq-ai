@@ -1,5 +1,6 @@
-mod logic;
+mod valid;
 mod parser;
+mod solver;
 
 use crate::parser::Expression;
 
