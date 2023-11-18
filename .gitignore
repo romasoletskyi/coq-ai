@@ -1,4 +1,4 @@
-coq_parser/target
+target
 coq_parser/tests/topology
 dataset/
 train/trained-*
