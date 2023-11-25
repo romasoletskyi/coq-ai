@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use crate::parser::Expression;
@@ -40,6 +40,10 @@ impl Prover {
         } else {
             Vec::new()
         }
+    }
+
+    pub fn get_hyp(&self) -> &HashMap<Rc<Expression>, usize> {
+        &self.hyp
     }
 }
 

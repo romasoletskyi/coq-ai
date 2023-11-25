@@ -1,3 +1,4 @@
+mod gen;
 mod parser;
 mod solver;
 mod valid;
