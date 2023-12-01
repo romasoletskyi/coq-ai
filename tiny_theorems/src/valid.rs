@@ -4,106 +4,104 @@ use std::rc::Rc;
 use crate::parser::Expression;
 
 pub struct Prover {
-    hyp: HashMap<Rc<Expression>, usize>,
+    hyp: HashSet<Rc<Expression>>,
     imp: HashMap<Rc<Expression>, Vec<Rc<Expression>>>,
-    index: usize,
 }
 
 impl Prover {
     fn new() -> Self {
         Prover {
-            hyp: HashMap::new(),
+            hyp: HashSet::new(),
             imp: HashMap::new(),
-            index: 0,
         }
     }
 
-    fn store(&mut self, expr: Rc<Expression>) {
-        if *self.hyp.entry(expr.clone()).or_insert_with(|| self.index) == self.index {
-            if let Expression::Implication(implication) = &*expr {
+    fn insert_hyp(&mut self, hypothesis: Rc<Expression>) {
+        self.hyp.insert(hypothesis.clone());
+        if let Expression::Implication(implication) = &*hypothesis {
+            let mut expr = implication.left.clone();
+            loop {
                 self.imp
-                    .entry(implication.left.clone())
+                    .entry(expr.clone())
                     .or_default()
                     .push(implication.right.clone());
-            }
-            self.index += 1;
-        }
-    }
-
-    fn contains_hyp(&self, hyp: &Rc<Expression>) -> bool {
-        self.hyp.contains_key(hyp)
-    }
-
-    fn get_imp(&self, left: &Rc<Expression>) -> Vec<Rc<Expression>> {
-        if let Some(vec) = self.imp.get(left) {
-            vec.clone()
-        } else {
-            Vec::new()
-        }
-    }
-
-    pub fn get_hyp(&self) -> &HashMap<Rc<Expression>, usize> {
-        &self.hyp
-    }
-}
-
-fn update_provable(prover: &mut Prover, expr: Rc<Expression>) {
-    prover.store(expr.clone());
-    match &*expr {
-        Expression::Implication(implication) => {
-            if prover.contains_hyp(&implication.left.clone()) {
-                update_provable(prover, implication.right.clone());
+                if self.hyp.contains(&expr) {
+                    for implied in self.imp.get(&expr).unwrap().clone() {
+                        self.insert_hyp(implied);
+                    }
+                }
+                if let Expression::Implication(imp) = &*expr {
+                    expr = imp.right.clone();
+                } else {
+                    break;
+                }
             }
         }
-        _ => {}
-    }
-    for proof in prover.get_imp(&expr) {
-        update_provable(prover, proof);
-    }
-}
-
-fn analyze_with_prover(prover: &mut Prover, expr: Rc<Expression>) {
-    match &*expr {
-        Expression::Implication(implication) => {
-            update_provable(prover, implication.left.clone());
-            analyze_with_prover(prover, implication.right.clone());
+        if self.imp.contains_key(&hypothesis) {
+            for implied in self.imp.get(&hypothesis).unwrap().clone() {
+                self.insert_hyp(implied);
+            }
         }
-        _ => {}
+    }
+
+    fn analyze(&mut self, hyp: Vec<Rc<Expression>>) {
+        for hypothesis in hyp {
+            if !self.hyp.contains(&hypothesis) {
+                self.insert_hyp(hypothesis);
+            }
+        }
+    }
+
+    fn proven(self) -> Vec<Rc<Expression>> {
+        self.hyp.iter().cloned().collect()
     }
 }
 
-pub fn analyze(expr: Rc<Expression>) -> Prover {
+pub fn analyze(hyp: Vec<Rc<Expression>>) -> Vec<Rc<Expression>> {
     let mut prover = Prover::new();
-    analyze_with_prover(&mut prover, expr.into());
-    prover
+    prover.analyze(hyp);
+    prover.proven()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::analyze;
+    use std::vec;
+
     use crate::parser::{parse, tokenize};
+    use crate::valid::analyze;
 
-    fn check(data: &str) {
-        let tokens = tokenize(data).unwrap();
-        let expr = parse(tokens.as_slice()).unwrap();
-        let prover = analyze(expr);
+    fn check(data: Vec<&str>) {
+        let proven = analyze(
+            data.iter()
+                .map(|s| parse(tokenize(s).unwrap().as_slice()).unwrap())
+                .collect(),
+        );
 
-        for (expr, index) in prover.hyp {
-            println!("{}: {}", index, expr);
+        for expr in proven {
+            println!("{}", expr);
         }
     }
 
     #[test]
     fn simple() {
-        check("(P -> Q) -> P -> Z");
+        check(vec!["P -> Q", "P"]);
+    }
+
+    #[test]
+    fn logic() {
+        check(vec!["Q", "(P -> Q) -> R"]);
     }
 
     #[test]
     fn complex() {
-        check(
-            "(P -> Q) -> (P -> R) -> (T -> R) ->
-            (S -> T ->  U) -> ((P -> Q) -> (P -> S)) ->
-            T -> P -> Z",
-        );
+        check(vec![
+            "P -> Q",
+            "P -> R",
+            "T -> R",
+            "S -> T -> U",
+            "(P -> Q) -> (P -> S)",
+            "T",
+            "P",
+        ]);
     }
 }

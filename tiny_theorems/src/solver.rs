@@ -97,8 +97,7 @@ impl Display for StateNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut visited = HashSet::new();
         let mut nodes = vec![self.clone()];
-        while !nodes.is_empty() {
-            let node = nodes.pop().unwrap();
+        while let Some(node) = nodes.pop() {
             visited.insert(node.state.clone());
             for app in &node.tactic_apps {
                 let mut s = String::new();
@@ -140,7 +139,7 @@ fn search_names(props: &mut Vec<char>, expr: &Rc<Expression>) {
 
 pub fn find_names(expr: &Rc<Expression>) -> Vec<char> {
     let mut props = Vec::new();
-    search_names(&mut props, &expr);
+    search_names(&mut props, expr);
     props
 }
 
@@ -230,14 +229,14 @@ impl Solver {
         } else {
             state
                 .hyp
-                .iter()
-                .map(|(name, _)| Tactic::Apply(name.clone()))
+                .keys()
+                .map(|name| Tactic::Apply(name.clone()))
                 .collect()
         };
 
         let mut tactic_apps = Vec::new();
         for tactic in tactics {
-            if let Ok(states) = self.use_tactic(&state, &tactic) {
+            if let Ok(states) = self.use_tactic(state, &tactic) {
                 tactic_apps.push(TacticApplication {
                     tactic,
                     states: states.iter().map(|new| self.solve(new)).collect(),
@@ -378,8 +377,7 @@ fn sample_proof<R: Rng + ?Sized>(state: Rc<RefCell<StateNode>>, rng: &mut R) -> 
     let mut states = vec![state];
     let mut levels = vec![(0, false)];
 
-    while !states.is_empty() {
-        let state = states.pop().unwrap();
+    while let Some(state) = states.pop() {
         let (level, bullet) = levels.pop().unwrap();
 
         let index = rng.gen_range(0..state.borrow().tactic_apps.len());
@@ -497,8 +495,7 @@ fn find_shortest(state: Rc<RefCell<StateNode>>) -> Rc<RefCell<StateNode>> {
                     },
                 );
                 let mut processed = vec![expand.borrow().state.clone()];
-                while !processed.is_empty() {
-                    let current = processed.pop().unwrap();
+                while let Some(current) = processed.pop() {
                     if let Some(upper) = required.get(&current) {
                         for upper in upper {
                             if let Some(index) = checker
