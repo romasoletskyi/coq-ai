@@ -112,7 +112,7 @@ pub fn tokenize(data: &str) -> Result<Vec<Token>> {
     basic = char | ( expr )
 */
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Implication {
     pub left: Rc<Expression>,
     pub right: Rc<Expression>,
@@ -128,7 +128,7 @@ impl Display for Implication {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Expression {
     Implication(Implication),
     Basic(char),

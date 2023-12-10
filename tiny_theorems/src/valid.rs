@@ -16,9 +16,12 @@ impl Prover {
         }
     }
 
-    fn insert_hyp(&mut self, hypothesis: Rc<Expression>) {
+    fn insert_hyp(&mut self, hypothesis: &Rc<Expression>) {
+        if self.hyp.contains(hypothesis) {
+            return;
+        }
         self.hyp.insert(hypothesis.clone());
-        if let Expression::Implication(implication) = &*hypothesis {
+        if let Expression::Implication(implication) = &**hypothesis {
             let mut expr = implication.left.clone();
             loop {
                 self.imp
@@ -26,7 +29,7 @@ impl Prover {
                     .or_default()
                     .push(implication.right.clone());
                 if self.hyp.contains(&expr) {
-                    for implied in self.imp.get(&expr).unwrap().clone() {
+                    for implied in &self.imp.get(&expr).unwrap().clone() {
                         self.insert_hyp(implied);
                     }
                 }
@@ -37,16 +40,16 @@ impl Prover {
                 }
             }
         }
-        if self.imp.contains_key(&hypothesis) {
-            for implied in self.imp.get(&hypothesis).unwrap().clone() {
+        if self.imp.contains_key(hypothesis) {
+            for implied in &self.imp.get(hypothesis).unwrap().clone() {
                 self.insert_hyp(implied);
             }
         }
     }
 
-    fn analyze(&mut self, hyp: Vec<Rc<Expression>>) {
+    fn analyze(&mut self, hyp: &Vec<Rc<Expression>>) {
         for hypothesis in hyp {
-            if !self.hyp.contains(&hypothesis) {
+            if !self.hyp.contains(hypothesis) {
                 self.insert_hyp(hypothesis);
             }
         }
@@ -57,7 +60,7 @@ impl Prover {
     }
 }
 
-pub fn analyze(hyp: Vec<Rc<Expression>>) -> Vec<Rc<Expression>> {
+pub fn analyze(hyp: &Vec<Rc<Expression>>) -> Vec<Rc<Expression>> {
     let mut prover = Prover::new();
     prover.analyze(hyp);
     prover.proven()
@@ -71,11 +74,11 @@ mod tests {
     use crate::valid::analyze;
 
     fn check(data: Vec<&str>) {
-        let proven = analyze(
-            data.iter()
-                .map(|s| parse(tokenize(s).unwrap().as_slice()).unwrap())
-                .collect(),
-        );
+        let hyp = data
+            .iter()
+            .map(|s| parse(tokenize(s).unwrap().as_slice()).unwrap())
+            .collect();
+        let proven = analyze(&hyp);
 
         for expr in proven {
             println!("{}", expr);
@@ -90,6 +93,16 @@ mod tests {
     #[test]
     fn logic() {
         check(vec!["Q", "(P -> Q) -> R"]);
+    }
+
+    #[test]
+    fn overflow1() {
+        check(vec!["M", "R -> M", "M -> R"]);
+    }
+
+    #[test]
+    fn overflow2() {
+        check(vec!["M", "(S -> R) -> M", "M -> R"]);
     }
 
     #[test]

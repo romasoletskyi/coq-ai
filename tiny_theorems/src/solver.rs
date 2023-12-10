@@ -1,5 +1,5 @@
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt::{Display, Write};
 use std::iter::zip;
 use std::rc::Rc;
@@ -32,6 +32,7 @@ using depth-first search. */
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct State {
     hyp: BTreeMap<String, Rc<Expression>>,
+    context: BTreeSet<Rc<Expression>>,
     goal: Rc<Expression>,
 }
 
@@ -70,6 +71,7 @@ impl Display for Tactic {
 enum TacticError {
     WrongName(String),
     WrongHypothesis,
+    NoNewIntros,
 }
 
 impl Display for TacticError {
@@ -77,6 +79,9 @@ impl Display for TacticError {
         match self {
             TacticError::WrongName(name) => write!(f, "can't find hypothesis with name {}", name),
             TacticError::WrongHypothesis => write!(f, "hypothesis implication doesn't match goal"),
+            TacticError::NoNewIntros => {
+                write!(f, "introduced hypothesis are already present in context")
+            }
         }
     }
 }
@@ -88,7 +93,7 @@ struct TacticApplication {
 }
 
 #[derive(Debug, Clone)]
-struct StateNode {
+pub struct StateNode {
     state: Rc<State>,
     tactic_apps: Vec<TacticApplication>,
 }
@@ -143,17 +148,36 @@ pub fn find_names(expr: &Rc<Expression>) -> Vec<char> {
     props
 }
 
-pub fn name_simple_hypothesis(expr: &Rc<Expression>) -> String {
-    let names = find_names(expr);
-    let mut hyp = "H".to_string();
-    for name in names {
-        hyp.push(name);
-    }
-    hyp
+type Namer = Box<dyn FnMut(&Rc<Expression>) -> String>;
+
+pub fn name_simple_hypothesis() -> Namer {
+    let mut storage: HashSet<String> = HashSet::new();
+    Box::new(move |expr| {
+        let names = find_names(expr);
+        let mut hyp = "H".to_string();
+        for name in names {
+            hyp.push(name);
+        }
+        let mut index = 0;
+        let mut extension = String::new();
+        loop {
+            if storage.contains(&hyp) {
+                for _ in 0..extension.len() {
+                    hyp.pop().unwrap();
+                }
+                extension = index.to_string();
+                hyp.push_str(&extension);
+                index += 1;
+            } else {
+                storage.insert(hyp.clone());
+                return hyp;
+            }
+        }
+    })
 }
 
 pub struct Solver {
-    naming: Box<dyn FnMut(&Rc<Expression>) -> String>,
+    naming: Namer,
     visited: HashMap<Rc<State>, Rc<RefCell<StateNode>>>,
 }
 
@@ -187,6 +211,7 @@ impl Solver {
                     .map(|goal| {
                         Rc::new(State {
                             hyp: state.hyp.clone(),
+                            context: state.context.clone(),
                             goal: goal.clone(),
                         })
                     })
@@ -195,10 +220,13 @@ impl Solver {
             Tactic::Intros(names) => {
                 let (intros, goal) = Solver::unfold_expression(state.goal.clone());
                 let mut new_state = (**state).clone();
-
                 new_state.goal = goal;
+
                 for (name, intro) in zip(names, intros) {
-                    new_state.hyp.insert(name.clone(), intro);
+                    if !new_state.context.contains(&intro) {
+                        new_state.hyp.insert(name.clone(), intro.clone());
+                        new_state.context.insert(intro);
+                    }
                 }
 
                 Ok(vec![Rc::new(new_state)])
@@ -252,87 +280,6 @@ impl Solver {
     }
 }
 
-fn find_solved(
-    node: &Rc<RefCell<StateNode>>,
-    visited: &mut HashSet<Rc<State>>,
-    solved: &mut HashSet<Rc<State>>,
-) {
-    visited.insert(node.borrow().state.clone());
-    for app in &node.borrow().tactic_apps {
-        if app.states.is_empty() {
-            solved.insert(node.borrow().state.clone());
-        } else {
-            let mut done = true;
-            for node in &app.states {
-                if !visited.contains(&node.borrow().state) {
-                    find_solved(node, visited, solved);
-                }
-                if !solved.contains(&node.borrow().state) {
-                    done = false;
-                    break;
-                }
-            }
-            if done {
-                solved.insert(node.borrow().state.clone());
-            }
-        }
-    }
-}
-
-fn prune_node(
-    node: &Rc<RefCell<StateNode>>,
-    pruned: &mut HashMap<Rc<State>, Rc<RefCell<StateNode>>>,
-    solved: &HashSet<Rc<State>>,
-) -> Rc<RefCell<StateNode>> {
-    if let Some(node) = pruned.get(&node.borrow().state) {
-        return node.clone();
-    } else {
-        pruned.insert(
-            node.borrow().state.clone(),
-            Rc::new(RefCell::new(StateNode {
-                state: node.borrow().state.clone(),
-                tactic_apps: Vec::new(),
-            })),
-        );
-    }
-    let mut tactic_apps = Vec::new();
-    for app in &node.borrow().tactic_apps {
-        if app.states.is_empty() {
-            tactic_apps.push(app.clone());
-        } else {
-            let mut done = true;
-            for node in &app.states {
-                if !solved.contains(&node.borrow().state) {
-                    done = false;
-                }
-            }
-            if done {
-                tactic_apps.push(TacticApplication {
-                    tactic: app.tactic.clone(),
-                    states: app
-                        .states
-                        .iter()
-                        .map(|node| prune_node(node, pruned, solved))
-                        .collect(),
-                })
-            }
-        }
-    }
-    *(pruned.get(&node.borrow().state).unwrap().borrow_mut()) = StateNode {
-        state: node.borrow().state.clone(),
-        tactic_apps,
-    };
-    pruned.get(&node.borrow().state).unwrap().clone()
-}
-
-fn prune(node: Rc<RefCell<StateNode>>) -> Rc<RefCell<StateNode>> {
-    let mut visited = HashSet::new();
-    let mut solved = HashSet::new();
-    find_solved(&node, &mut visited, &mut solved);
-    let mut pruned = HashMap::new();
-    prune_node(&node, &mut pruned, &solved)
-}
-
 #[derive(Debug, Clone)]
 pub enum ProofStep {
     Intros(Vec<String>),
@@ -372,7 +319,7 @@ impl Display for ProofStep {
     }
 }
 
-fn sample_proof<R: Rng + ?Sized>(state: Rc<RefCell<StateNode>>, rng: &mut R) -> Vec<ProofStep> {
+pub fn sample_proof<R: Rng + ?Sized>(state: Rc<RefCell<StateNode>>, rng: &mut R) -> Vec<ProofStep> {
     let mut proof = Vec::new();
     let mut states = vec![state];
     let mut levels = vec![(0, false)];
@@ -422,6 +369,7 @@ struct TacticChecker {
 #[derive(Debug)]
 struct RequirementChecker {
     tactics: Vec<TacticChecker>,
+    solution: Option<usize>,
 }
 
 impl RequirementChecker {
@@ -437,19 +385,25 @@ impl RequirementChecker {
                 satisfied: HashSet::new(),
             })
         }
-        RequirementChecker { tactics }
+        RequirementChecker {
+            tactics,
+            solution: None,
+        }
     }
 
-    fn satisfied(&mut self, state: &Rc<State>) -> Option<usize> {
+    fn satisfied(&mut self, state: &Rc<State>) {
+        if self.solution.is_some() {
+            return;
+        }
         for i in 0..self.tactics.len() {
             if self.tactics[i].required.contains(state) {
                 self.tactics[i].satisfied.insert(state.clone());
                 if self.tactics[i].required.len() == self.tactics[i].satisfied.len() {
-                    return Some(i);
+                    self.solution = Some(i);
+                    return;
                 }
             }
         }
-        None
     }
 }
 
@@ -471,20 +425,24 @@ fn build_shortest(
     }))
 }
 
-fn find_shortest(state: Rc<RefCell<StateNode>>) -> Rc<RefCell<StateNode>> {
+pub fn find_shortest(state: Rc<RefCell<StateNode>>) -> Rc<RefCell<StateNode>> {
     let mut states = VecDeque::new();
     let mut solved = HashMap::new();
     let mut required: HashMap<Rc<State>, Vec<Rc<RefCell<StateNode>>>> = HashMap::new();
     let mut checker = HashMap::new();
     states.push_back(state.clone());
 
-    while !states.is_empty() {
-        let expand = states.pop_front().unwrap();
-        checker
-            .entry(expand.borrow().state.clone())
-            .or_insert(RequirementChecker::new(&expand));
+    while let Some(expand) = states.pop_front() {
+        let first = if !checker.contains_key(&expand.borrow().state) {
+            checker.insert(
+                expand.borrow().state.clone(),
+                RequirementChecker::new(&expand),
+            );
+            true
+        } else {
+            false
+        };
 
-        let mut done = false;
         for app in &expand.borrow().tactic_apps {
             if app.states.is_empty() {
                 solved.insert(
@@ -494,15 +452,34 @@ fn find_shortest(state: Rc<RefCell<StateNode>>) -> Rc<RefCell<StateNode>> {
                         states: Vec::new(),
                     },
                 );
-                let mut processed = vec![expand.borrow().state.clone()];
-                while let Some(current) = processed.pop() {
-                    if let Some(upper) = required.get(&current) {
-                        for upper in upper {
-                            if let Some(index) = checker
-                                .get_mut(&upper.borrow().state)
-                                .unwrap()
-                                .satisfied(&current)
-                            {
+                break;
+            }
+            for next in &app.states {
+                states.push_back(next.clone());
+                if first {
+                    if solved.contains_key(&next.borrow().state) {
+                        checker
+                            .get_mut(&expand.borrow().state)
+                            .unwrap()
+                            .satisfied(&next.borrow().state);
+                    }
+                    required
+                        .entry(next.borrow().state.clone())
+                        .or_default()
+                        .push(expand.clone());
+                }
+            }
+        }
+
+        if solved.contains_key(&expand.borrow().state) {
+            let mut processed = vec![expand.borrow().state.clone()];
+            while let Some(current) = processed.pop() {
+                if let Some(upper) = required.get(&current) {
+                    for upper in upper {
+                        let check = checker.get_mut(&upper.borrow().state).unwrap();
+                        check.satisfied(&current);
+                        if !solved.contains_key(&upper.borrow().state) {
+                            if let Some(index) = check.solution {
                                 processed.push(upper.borrow().state.clone());
                                 let app = &upper.borrow().tactic_apps[index];
                                 solved.insert(
@@ -517,27 +494,40 @@ fn find_shortest(state: Rc<RefCell<StateNode>>) -> Rc<RefCell<StateNode>> {
                                     },
                                 );
                                 if upper.borrow().state == state.borrow().state {
-                                    done = true;
+                                    return build_shortest(&state.borrow().state, &solved);
                                 }
                             }
                         }
                     }
                 }
             }
-            for next in &app.states {
-                states.push_back(next.clone());
-                required
-                    .entry(next.borrow().state.clone())
-                    .or_default()
-                    .push(expand.clone());
-            }
-        }
-        if done {
-            break;
         }
     }
 
     build_shortest(&state.borrow().state, &solved)
+}
+
+pub fn get_proof<R: Rng + ?Sized>(
+    rng: &mut R,
+    goal: Rc<Expression>,
+    proof_getter: fn(Rc<RefCell<StateNode>>, &mut R) -> Vec<ProofStep>,
+) -> Vec<ProofStep> {
+    let mut solver = Solver {
+        naming: name_simple_hypothesis(),
+        visited: HashMap::new(),
+    };
+
+    let solution = solver.solve(&Rc::new(State {
+        hyp: BTreeMap::new(),
+        context: BTreeSet::new(),
+        goal,
+    }));
+
+    if !solution.borrow().tactic_apps.is_empty() {
+        proof_getter(solution, rng)
+    } else {
+        Vec::new()
+    }
 }
 
 #[cfg(test)]
@@ -545,13 +535,13 @@ mod tests {
     use rand::SeedableRng;
     use rand_chacha::ChaCha8Rng;
 
-    use super::{find_names, Solver, State};
+    use super::{Solver, State};
     use crate::{
-        parser::{parse, tokenize, Expression},
-        solver::{find_shortest, prune, sample_proof},
+        parser::{parse, tokenize},
+        solver::{find_shortest, get_proof, name_simple_hypothesis, sample_proof},
     };
     use std::{
-        collections::{BTreeMap, HashMap},
+        collections::{BTreeMap, BTreeSet, HashMap},
         rc::Rc,
     };
 
@@ -560,23 +550,16 @@ mod tests {
         let goal = parse(tokens.as_slice()).unwrap();
 
         let mut solver = Solver {
-            naming: Box::new(|expr: &Rc<Expression>| {
-                let names = find_names(expr);
-                let mut hyp = "H".to_string();
-                for name in names {
-                    hyp.push(name);
-                }
-                hyp
-            }),
+            naming: name_simple_hypothesis(),
             visited: HashMap::new(),
         };
 
         let mut solution = solver.solve(&Rc::new(State {
             hyp: BTreeMap::new(),
+            context: BTreeSet::new(),
             goal,
         }));
         println!("{}", solution.borrow());
-        solution = prune(solution);
 
         if !solution.borrow().tactic_apps.is_empty() {
             solution = find_shortest(solution);
@@ -593,18 +576,46 @@ mod tests {
     }
 
     #[test]
+    fn check_get_proof() {
+        let tokens = tokenize(
+            "M -> ((R -> M) -> R) -> (M -> R -> S) -> (R -> S -> N) -> (M -> R) -> (S -> M) -> N",
+        )
+        .unwrap();
+        let goal = parse(tokens.as_slice()).unwrap();
+
+        let mut rng = ChaCha8Rng::seed_from_u64(0);
+        let proof = get_proof(&mut rng, goal, sample_proof);
+        println!("{:?}", proof);
+    }
+
+    #[test]
     fn simple() {
         check("(P -> Q) -> P -> Q");
     }
 
     #[test]
-    fn void() {
-        check("(P -> Q) -> Q");
+    fn repeat() {
+        check("M -> ((M -> R) -> R) -> R -> R");
     }
 
     #[test]
-    fn apply_loop() {
-        check("(P -> P) -> P");
+    fn implication_triple() {
+        check("M -> (M -> R) -> (R -> M) -> (M -> R -> S) -> S");
+    }
+
+    #[test]
+    fn implication_chain() {
+        check("M -> (M -> R) -> (R -> S) -> (S -> R) -> S");
+    }
+
+    #[test]
+    fn implication_chain_complex() {
+        check("R -> (M -> R -> S) -> (R -> M) -> (M -> S -> R) -> (M -> R) -> S");
+    }
+
+    #[test]
+    fn implication_intermediate_goal() {
+        check("M -> ((M -> S) -> R) -> S -> R");
     }
 
     #[test]
@@ -617,8 +628,13 @@ mod tests {
     }
 
     #[test]
-    fn overflow_simple() {
-        check("((A -> B) -> B) -> B");
+    fn long() {
+        check("M -> ((O -> M) -> S) -> (S -> N -> R) -> (S -> M -> N) -> (S -> R -> O) -> (M -> S) -> (O -> R) -> O");
+    }
+
+    #[test]
+    fn tricky() {
+        check("M -> (N -> S) -> ((N -> S) -> N) -> S");
     }
 
     #[test]
