@@ -11,10 +11,10 @@ use crate::parser::{Expression, Implication};
 use crate::solver::{find_shortest, get_proof, sample_proof, ProofStep};
 use crate::valid::analyze;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Statement {
-    hyp: Vec<Rc<Expression>>,
-    goal: Rc<Expression>,
+    pub(crate) hyp: Vec<Rc<Expression>>,
+    pub(crate) goal: Rc<Expression>,
 }
 
 impl Display for Statement {
@@ -24,6 +24,13 @@ impl Display for Statement {
 }
 
 impl Statement {
+    pub fn new(goal: Rc<Expression>) -> Self {
+        Statement {
+            hyp: Vec::new(),
+            goal,
+        }
+    }
+
     fn to_expression(&self) -> Rc<Expression> {
         let mut expr = self.goal.clone();
         for hypothesis in self.hyp.iter().rev() {
@@ -202,10 +209,7 @@ impl StatementGenerator {
 
             let goals: Vec<_> = analyze(&statement.hyp)
                 .iter()
-                .filter(|&expr| match **expr {
-                    Expression::Basic(_) => true,
-                    _ => false,
-                })
+                .filter(|&expr| matches!(**expr, Expression::Basic(_)))
                 .cloned()
                 .collect();
             if !goals.is_empty() {

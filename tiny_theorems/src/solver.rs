@@ -305,7 +305,7 @@ impl Display for ProofStep {
                     1 => '+',
                     _ => '*',
                 };
-                writeln!(f, "")?;
+                writeln!(f)?;
                 for _ in 0..*level {
                     write!(f, "  ")?;
                 }
