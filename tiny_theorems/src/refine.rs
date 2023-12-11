@@ -93,8 +93,14 @@ impl Alphabet {
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct NormalStatement(Statement);
 
+impl Into<Statement> for NormalStatement {
+    fn into(self) -> Statement {
+        self.0
+    }
+}
+
 impl NormalStatement {
-    fn new(mut statement: Statement) -> Self {
+    pub(crate) fn new(mut statement: Statement) -> Self {
         while let Expression::Implication(imp) = &*statement.goal {
             statement.hyp.push(imp.left.clone());
             statement.goal = imp.right.clone();

@@ -30,7 +30,7 @@ After constructing a full graph of states we can collect all proofs
 using depth-first search. */
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct State {
+pub struct State {
     hyp: BTreeMap<String, Rc<Expression>>,
     context: BTreeSet<Rc<Expression>>,
     goal: Rc<Expression>,
@@ -71,7 +71,6 @@ impl Display for Tactic {
 enum TacticError {
     WrongName(String),
     WrongHypothesis,
-    NoNewIntros,
 }
 
 impl Display for TacticError {
@@ -79,9 +78,6 @@ impl Display for TacticError {
         match self {
             TacticError::WrongName(name) => write!(f, "can't find hypothesis with name {}", name),
             TacticError::WrongHypothesis => write!(f, "hypothesis implication doesn't match goal"),
-            TacticError::NoNewIntros => {
-                write!(f, "introduced hypothesis are already present in context")
-            }
         }
     }
 }
@@ -455,7 +451,6 @@ pub fn find_shortest(state: Rc<RefCell<StateNode>>) -> Rc<RefCell<StateNode>> {
                 break;
             }
             for next in &app.states {
-                states.push_back(next.clone());
                 if first {
                     if solved.contains_key(&next.borrow().state) {
                         checker
@@ -499,6 +494,12 @@ pub fn find_shortest(state: Rc<RefCell<StateNode>>) -> Rc<RefCell<StateNode>> {
                             }
                         }
                     }
+                }
+            }
+        } else {
+            for app in &expand.borrow().tactic_apps {
+                for next in &app.states {
+                    states.push_back(next.clone());
                 }
             }
         }
@@ -656,5 +657,16 @@ mod tests {
             "(O -> Z -> X -> K) -> X -> (K -> X) -> (I -> X -> K -> Z) -> (Z -> K) -> 
         ((X -> C) -> C) -> C -> (O -> Z -> X) -> I -> X -> K -> Z",
         );
+    }
+
+    #[test]
+    fn double() {
+        check("((A -> D) -> B -> C) -> ((B -> C) -> B) -> ((C -> B) -> B) -> (A -> D) -> (B -> C -> A) -> A");
+        check("((A -> D) -> B -> C) -> ((B -> C) -> B) -> ((C -> B) -> B) -> (A -> D) -> (B -> C -> A) -> A");
+    }
+
+    #[test]
+    fn proper_naming() {
+        check("((A -> B) -> D) -> ((A -> D) -> A -> C) -> (A -> B) -> A -> C");
     }
 }

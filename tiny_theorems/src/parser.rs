@@ -143,6 +143,40 @@ impl Display for Expression {
     }
 }
 
+impl From<Box<UniqueExpression>> for Rc<Expression> {
+    fn from(value: Box<UniqueExpression>) -> Self {
+        Rc::new(match *value {
+            UniqueExpression::Basic(char) => Expression::Basic(char),
+            UniqueExpression::Implication(imp) => Expression::Implication(Implication {
+                left: imp.left.into(),
+                right: imp.right.into(),
+            }),
+        })
+    }
+}
+
+pub struct UniqueImplication {
+    left: Box<UniqueExpression>,
+    right: Box<UniqueExpression>,
+}
+
+pub enum UniqueExpression {
+    Implication(UniqueImplication),
+    Basic(char),
+}
+
+impl From<Rc<Expression>> for Box<UniqueExpression> {
+    fn from(value: Rc<Expression>) -> Self {
+        Box::new(match &*value {
+            Expression::Basic(char) => UniqueExpression::Basic(*char),
+            Expression::Implication(imp) => UniqueExpression::Implication(UniqueImplication {
+                left: imp.left.clone().into(),
+                right: imp.right.clone().into(),
+            }),
+        })
+    }
+}
+
 struct Parser<'a> {
     tokens: &'a [Token],
     index: usize,

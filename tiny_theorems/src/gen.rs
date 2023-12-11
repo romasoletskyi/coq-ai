@@ -7,7 +7,8 @@ use rand::SeedableRng;
 use rand::{seq::SliceRandom, Rng};
 use rand_chacha::ChaCha8Rng;
 
-use crate::parser::{Expression, Implication};
+use crate::parser::{Expression, Implication, UniqueExpression};
+use crate::refine::NormalStatement;
 use crate::solver::{find_shortest, get_proof, sample_proof, ProofStep};
 use crate::valid::analyze;
 
@@ -20,6 +21,15 @@ pub struct Statement {
 impl Display for Statement {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.to_expression())
+    }
+}
+
+impl From<UniqueStatement> for Statement {
+    fn from(value: UniqueStatement) -> Self {
+        Statement {
+            hyp: value.hyp.into_iter().map(|x| x.into()).collect(),
+            goal: value.goal.into(),
+        }
     }
 }
 
@@ -43,13 +53,27 @@ impl Statement {
     }
 }
 
-struct Mutator {
+pub struct UniqueStatement {
+    hyp: Vec<Box<UniqueExpression>>,
+    goal: Box<UniqueExpression>,
+}
+
+impl From<Statement> for UniqueStatement {
+    fn from(value: Statement) -> Self {
+        UniqueStatement {
+            hyp: value.hyp.iter().map(|x| x.clone().into()).collect(),
+            goal: value.goal.into(),
+        }
+    }
+}
+
+pub struct Mutator {
     hyp_cum_prob: Vec<f64>,
     goal_change_prob: f64,
 }
 
 impl Mutator {
-    fn new(hyp_prob: Vec<f64>, goal_change_prob: f64) -> Self {
+    pub fn new(hyp_prob: Vec<f64>, goal_change_prob: f64) -> Self {
         let hyp_cum_prob = hyp_prob
             .iter()
             .filter_map({
@@ -90,6 +114,14 @@ impl Mutator {
     }
 }
 
+pub fn generate_prop_symbols(symbol_num: usize) -> Vec<char> {
+    let mut symbols = Vec::new();
+    for i in 0..symbol_num {
+        symbols.push(('A' as u8).wrapping_add(i as u8) as char);
+    }
+    symbols
+}
+
 pub struct StatementGenerator {
     symbols: Vec<char>,
     update_length: usize,
@@ -98,15 +130,7 @@ pub struct StatementGenerator {
 }
 
 impl StatementGenerator {
-    fn new(symbols_num: usize, update_length: usize, mutator: Mutator, seed: u64) -> Self {
-        let mut rng = ChaCha8Rng::seed_from_u64(seed);
-        let mut s = HashSet::new();
-        while s.len() < symbols_num {
-            s.insert(rng.gen_range('A'..'['));
-        }
-        let mut symbols: Vec<char> = s.iter().copied().collect();
-        symbols.sort();
-
+    pub fn new(symbols: Vec<char>, update_length: usize, mutator: Mutator, seed: u64) -> Self {
         StatementGenerator {
             symbols,
             update_length,
@@ -185,15 +209,15 @@ impl StatementGenerator {
         })
     }
 
-    fn initalize_statement(&self) -> Statement {
-        let goal = Rc::new(Expression::Basic(self.symbols[0]));
+    pub fn initalize_statement(symbols: &Vec<char>) -> Statement {
+        let goal = Rc::new(Expression::Basic(symbols[0]));
         Statement {
             hyp: vec![goal.clone()],
             goal,
         }
     }
 
-    fn mutate_statement(
+    pub fn mutate_statement(
         &mut self,
         old_statement: &Statement,
         sample: usize,
@@ -205,8 +229,6 @@ impl StatementGenerator {
             for _ in 0..self.update_length {
                 statement.hyp.push(self.gen_hypothesis());
             }
-            println!("mut hyp {}", statement);
-
             let goals: Vec<_> = analyze(&statement.hyp)
                 .iter()
                 .filter(|&expr| matches!(**expr, Expression::Basic(_)))
@@ -217,15 +239,12 @@ impl StatementGenerator {
                     .mutator
                     .choose_goal(&mut self.rng, statement.goal, &goals);
             }
-            println!("mut goal {}", statement);
 
             let proof = get_proof(&mut self.rng, statement.to_expression(), |state, rng| {
                 sample_proof(find_shortest(state), rng)
             });
-            println!("proved");
 
             if let ProofStep::Intros(intros) = &proof[0] {
-                println!("{:?}", intros);
                 let hyp_names: HashMap<_, _> = intros
                     .iter()
                     .map({
@@ -237,8 +256,6 @@ impl StatementGenerator {
                     })
                     .collect();
 
-                println!("{:?}", hyp_names);
-                println!("{:?}", proof);
                 let mut used_set = HashSet::new();
                 for i in 1..proof.len() {
                     if let ProofStep::Apply(name) = &proof[i] {
@@ -258,11 +275,9 @@ impl StatementGenerator {
                 panic!("proof doesn't start with intros");
             }
 
-            let mut sorted_statement = statement.clone();
-            sorted_statement.hyp.sort();
-
+            statement = NormalStatement::new(statement).into();
             statements.push((
-                sorted_statement,
+                statement.clone(),
                 get_proof(&mut self.rng, statement.to_expression(), |state, rng| {
                     sample_proof(find_shortest(state), rng)
                 }),
@@ -278,7 +293,7 @@ pub struct TheoremPrinter {
 }
 
 impl TheoremPrinter {
-    fn new() -> Self {
+    pub fn new() -> Self {
         TheoremPrinter {
             names: HashSet::new(),
             rng: ChaCha8Rng::from_entropy(),
@@ -296,7 +311,7 @@ impl TheoremPrinter {
     pub fn print(
         &mut self,
         f: &mut dyn Write,
-        generator: &StatementGenerator,
+        symbols: &Vec<char>,
         statement: &Statement,
         proof: &Vec<ProofStep>,
     ) -> std::io::Result<()> {
@@ -309,16 +324,19 @@ impl TheoremPrinter {
             }
         }
 
-        write!(f, "Theorem {}: forall", name)?;
-        for symbol in &generator.symbols {
-            write!(f, " {}", symbol)?;
+        write!(f, "Theorem {}: forall (", name)?;
+        for i in 0..symbols.len() {
+            if i > 0 {
+                write!(f, " ")?;
+            }
+            write!(f, "{}", symbols[i])?;
         }
-        writeln!(f, ", {}.", statement.to_expression())?;
+        writeln!(f, " : Prop), {}.", statement.to_expression())?;
         writeln!(f, "Proof.")?;
         write!(
             f,
             "{}",
-            ProofStep::Intros(generator.symbols.iter().map(|c| c.to_string()).collect())
+            ProofStep::Intros(symbols.iter().map(|c| c.to_string()).collect())
         )?;
 
         for step in proof {
@@ -331,18 +349,20 @@ impl TheoremPrinter {
 
 #[cfg(test)]
 mod tests {
-    use super::{Mutator, StatementGenerator, TheoremPrinter};
+    use super::{generate_prop_symbols, Mutator, StatementGenerator, TheoremPrinter};
 
     #[test]
     fn mutate_statements() {
+        let symbols = generate_prop_symbols(4);
+        let mut statements = vec![StatementGenerator::initalize_statement(&symbols)];
+
         let mut gen = StatementGenerator::new(
-            5,
+            symbols.clone(),
             2,
             Mutator::new(vec![0.2, 0.2, 0.2, 0.2, 0.1, 0.1], 0.5),
             0,
         );
         let mut printer = TheoremPrinter::new();
-        let mut statements = vec![gen.initalize_statement()];
 
         let sample = 10;
         let pool = 10;
@@ -359,7 +379,9 @@ mod tests {
             for i in 0..cut_len {
                 let mut handle = std::io::stdout().lock();
                 let (statement, proof) = &mutated[i];
-                printer.print(&mut handle, &gen, statement, proof).unwrap();
+                printer
+                    .print(&mut handle, &symbols, statement, proof)
+                    .unwrap();
             }
 
             statements = mutated[..cut_len]
