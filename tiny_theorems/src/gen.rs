@@ -9,7 +9,7 @@ use rand_chacha::ChaCha8Rng;
 
 use crate::parser::{Expression, Implication, UniqueExpression};
 use crate::refine::NormalStatement;
-use crate::solver::{find_shortest, get_proof, sample_proof, ProofStep};
+use crate::solver::{get_proof, ProofStep};
 use crate::valid::analyze;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -240,9 +240,7 @@ impl StatementGenerator {
                     .choose_goal(&mut self.rng, statement.goal, &goals);
             }
 
-            let proof = get_proof(&mut self.rng, statement.to_expression(), |state, rng| {
-                sample_proof(find_shortest(state), rng)
-            });
+            let proof = get_proof(statement.to_expression());
 
             if let ProofStep::Intros(intros) = &proof[0] {
                 let hyp_names: HashMap<_, _> = intros
@@ -278,9 +276,7 @@ impl StatementGenerator {
             statement = NormalStatement::new(statement).into();
             statements.push((
                 statement.clone(),
-                get_proof(&mut self.rng, statement.to_expression(), |state, rng| {
-                    sample_proof(find_shortest(state), rng)
-                }),
+                get_proof( statement.to_expression()),
             ));
         }
         statements
