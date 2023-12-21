@@ -164,7 +164,7 @@ pub fn name_simple_hypothesis() -> Namer {
 
 struct TacticApplication {
     tactic: Tactic,
-    states: Vec<Rc<State>>
+    states: Vec<Rc<State>>,
 }
 
 #[derive(Debug)]
@@ -217,7 +217,10 @@ pub struct Solver {
 
 impl Solver {
     fn new(naming: Namer) -> Self {
-        Solver { naming, states: HashMap::new() }
+        Solver {
+            naming,
+            states: HashMap::new(),
+        }
     }
 
     fn unfold_expression(mut expr: Rc<Expression>) -> (Vec<Rc<Expression>>, Rc<Expression>) {
@@ -276,7 +279,7 @@ impl Solver {
         let mut proof = Vec::new();
         let mut states = vec![state.clone()];
         let mut levels = vec![(0, false)];
-    
+
         while let Some(state) = states.pop() {
             let (level, bullet) = levels.pop().unwrap();
             let tactic_apps = self.states.get(&state).unwrap();
@@ -286,12 +289,12 @@ impl Solver {
                 Tactic::Intros(names) => ProofStep::Intros(names.clone()),
                 Tactic::Apply(hyp) => ProofStep::Apply(hyp.clone()),
             };
-    
+
             if bullet {
                 proof.push(ProofStep::Bullet(level));
             }
             proof.push(step);
-    
+
             let next_states = &tactic_apps[index].states;
             for next in next_states.iter().rev() {
                 states.push(next.clone());
@@ -304,7 +307,7 @@ impl Solver {
                 }
             }
         }
-    
+
         proof
     }
 
@@ -336,15 +339,15 @@ impl Solver {
                 for tactic in tactics {
                     if let Ok(states) = self.use_tactic(&expand, &tactic) {
                         for state in &states {
-                            required.entry(state.clone()).or_default().push(expand.clone());
+                            required
+                                .entry(state.clone())
+                                .or_default()
+                                .push(expand.clone());
                         }
                         if states.is_empty() {
                             solved.insert(expand.clone(), tactic_apps.len());
                         }
-                        tactic_apps.push(TacticApplication {
-                            tactic,
-                            states
-                        })
+                        tactic_apps.push(TacticApplication { tactic, states })
                     }
                 }
 
@@ -356,7 +359,7 @@ impl Solver {
             if let Some(&index) = solved.get(&expand) {
                 for state in &tactic_apps[index].states {
                     order.push_back(state.clone());
-                }   
+                }
 
                 let mut states = vec![expand.clone()];
                 let mut solved_states = states.clone();
@@ -367,7 +370,7 @@ impl Solver {
                             if !solved.contains_key(candidate) {
                                 let check = checker.get_mut(candidate).unwrap();
                                 for solved_state in &solved_states {
-                                    check.satisfied(&solved_state);
+                                    check.satisfied(solved_state);
                                 }
                                 if let Some(candidate_index) = check.solution {
                                     solved.insert(candidate.clone(), candidate_index);
@@ -469,7 +472,7 @@ mod tests {
     #[test]
     fn implication_triple() {
         check("M -> (M -> R) -> (R -> M) -> (M -> R -> S) -> S");
-    } 
+    }
 
     #[test]
     fn implication_chain() {

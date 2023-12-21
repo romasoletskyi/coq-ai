@@ -80,7 +80,7 @@ impl Alphabet {
     fn rename_expression(&self, expr: &Rc<Expression>) -> Rc<Expression> {
         Rc::new(match &**expr {
             Expression::Basic(letter) => {
-                Expression::Basic(('A' as u8).wrapping_add(*self.map.get(letter).unwrap()) as char)
+                Expression::Basic(b'A'.wrapping_add(*self.map.get(letter).unwrap()) as char)
             }
             Expression::Implication(imp) => Expression::Implication(Implication {
                 left: self.rename_expression(&imp.left),
@@ -93,9 +93,9 @@ impl Alphabet {
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct NormalStatement(Statement);
 
-impl Into<Statement> for NormalStatement {
-    fn into(self) -> Statement {
-        self.0
+impl From<NormalStatement> for Statement {
+    fn from(value: NormalStatement) -> Self {
+        value.0
     }
 }
 

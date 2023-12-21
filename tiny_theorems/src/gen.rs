@@ -117,7 +117,7 @@ impl Mutator {
 pub fn generate_prop_symbols(symbol_num: usize) -> Vec<char> {
     let mut symbols = Vec::new();
     for i in 0..symbol_num {
-        symbols.push(('A' as u8).wrapping_add(i as u8) as char);
+        symbols.push(b'A'.wrapping_add(i as u8) as char);
     }
     symbols
 }
@@ -209,7 +209,7 @@ impl StatementGenerator {
         })
     }
 
-    pub fn initalize_statement(symbols: &Vec<char>) -> Statement {
+    pub fn initalize_statement(symbols: &[char]) -> Statement {
         let goal = Rc::new(Expression::Basic(symbols[0]));
         Statement {
             hyp: vec![goal.clone()],
@@ -255,8 +255,8 @@ impl StatementGenerator {
                     .collect();
 
                 let mut used_set = HashSet::new();
-                for i in 1..proof.len() {
-                    if let ProofStep::Apply(name) = &proof[i] {
+                for step in proof.iter().skip(1) {
+                    if let ProofStep::Apply(name) = step {
                         if let Some(&index) = hyp_names.get(name) {
                             used_set.insert(index);
                         }
@@ -274,10 +274,7 @@ impl StatementGenerator {
             }
 
             statement = NormalStatement::new(statement).into();
-            statements.push((
-                statement.clone(),
-                get_proof( statement.to_expression()),
-            ));
+            statements.push((statement.clone(), get_proof(statement.to_expression())));
         }
         statements
     }
@@ -307,7 +304,7 @@ impl TheoremPrinter {
     pub fn print(
         &mut self,
         f: &mut dyn Write,
-        symbols: &Vec<char>,
+        symbols: &[char],
         statement: &Statement,
         proof: &Vec<ProofStep>,
     ) -> std::io::Result<()> {
@@ -321,11 +318,11 @@ impl TheoremPrinter {
         }
 
         write!(f, "Theorem {}: forall (", name)?;
-        for i in 0..symbols.len() {
+        for (i, symbol) in symbols.iter().enumerate() {
             if i > 0 {
                 write!(f, " ")?;
             }
-            write!(f, "{}", symbols[i])?;
+            write!(f, "{}", symbol)?;
         }
         writeln!(f, " : Prop), {}.", statement.to_expression())?;
         writeln!(f, "Proof.")?;
