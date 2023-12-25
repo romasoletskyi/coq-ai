@@ -1,5 +1,6 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{hash_map::DefaultHasher, HashMap, HashSet};
 use std::fmt::Display;
+use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::rc::Rc;
 
@@ -301,6 +302,10 @@ impl TheoremPrinter {
         name
     }
 
+    pub fn insert_name(&mut self, name: String) {
+        self.names.insert(name);
+    }
+
     pub fn print(
         &mut self,
         f: &mut dyn Write,
@@ -337,6 +342,36 @@ impl TheoremPrinter {
         }
 
         writeln!(f, "\nQed.")
+    }
+}
+
+pub struct StatementBank {
+    pub hashes: HashSet<u64>,
+}
+
+impl StatementBank {
+    pub fn new() -> Self {
+        StatementBank {
+            hashes: HashSet::new(),
+        }
+    }
+
+    fn hash(statement: &Statement) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        statement.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    pub fn len(&self) -> usize {
+        self.hashes.len()
+    }
+
+    pub fn contains(&self, statement: &Statement) -> bool {
+        self.hashes.contains(&StatementBank::hash(statement))
+    }
+
+    pub fn insert(&mut self, statement: &Statement) {
+        self.hashes.insert(StatementBank::hash(statement));
     }
 }
 

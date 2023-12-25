@@ -100,7 +100,7 @@ impl From<NormalStatement> for Statement {
 }
 
 impl NormalStatement {
-    pub(crate) fn new(mut statement: Statement) -> Self {
+    pub fn new(mut statement: Statement) -> Self {
         while let Expression::Implication(imp) = &*statement.goal {
             statement.hyp.push(imp.left.clone());
             statement.goal = imp.right.clone();
