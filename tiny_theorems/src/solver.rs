@@ -5,6 +5,7 @@ use std::rc::Rc;
 
 use anyhow::{bail, Result};
 
+use crate::gen::Statement;
 use crate::parser::Expression;
 
 /* During each step of proof we have a state [H |- goal] consisting of
@@ -24,9 +25,19 @@ using breadth-first search. */
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct State {
-    hyp: BTreeMap<String, Rc<Expression>>,
+    pub hyp: BTreeMap<String, Rc<Expression>>,
     context: BTreeSet<Rc<Expression>>,
-    goal: Rc<Expression>,
+    pub goal: Rc<Expression>,
+}
+
+impl State {
+    pub fn new(goal: Rc<Expression>) -> State {
+        State { hyp: BTreeMap::new(), context: BTreeSet::new(), goal }
+    }
+
+    pub fn from_statement(namer: &mut Namer, statement: &Statement) -> State {
+        State { hyp: statement.hyp.iter().map(|x| (namer(x), x.clone())).collect(), context: BTreeSet::new(), goal: statement.goal.clone() }
+    }
 }
 
 impl Display for State {
@@ -40,7 +51,7 @@ impl Display for State {
 }
 
 #[derive(Debug, Clone)]
-enum Tactic {
+pub enum Tactic {
     Apply(String),
     Intros(Vec<String>),
 }
@@ -56,6 +67,68 @@ impl Display for Tactic {
                 }
                 std::fmt::Result::Ok(())
             }
+        }
+    }
+}
+
+impl From<ProofStep> for Option<Tactic> {
+    fn from(value: ProofStep) -> Self {
+        match value {
+            ProofStep::Apply(hyp) => Some(Tactic::Apply(hyp)),
+            ProofStep::Intros(intros) => Some(Tactic::Intros(intros)),
+            _ => None
+        }
+    }
+}
+
+pub fn unfold_expression(mut expr: Rc<Expression>) -> (Vec<Rc<Expression>>, Rc<Expression>) {
+    let mut premise = Vec::new();
+    while let Expression::Implication(imp) = &*expr {
+        premise.push(imp.left.clone());
+        expr = imp.right.clone();
+    }
+    (premise, expr)
+}
+
+pub fn use_tactic(state: &State, tactic: &Tactic) -> Result<Vec<Rc<State>>> {
+    match tactic {
+        Tactic::Apply(name) => {
+            let hyp = if let Some(hyp) = state.hyp.get(name) {
+                hyp
+            } else {
+                bail!(TacticError::WrongName(name.clone()));
+            }
+            .clone();
+
+            let (to_prove, hyp) = unfold_expression(hyp);
+            if hyp != state.goal {
+                bail!(TacticError::WrongHypothesis);
+            }
+
+            Ok(to_prove
+                .iter()
+                .map(|goal| {
+                    Rc::new(State {
+                        hyp: state.hyp.clone(),
+                        context: state.context.clone(),
+                        goal: goal.clone(),
+                    })
+                })
+                .collect())
+        }
+        Tactic::Intros(names) => {
+            let (intros, goal) = unfold_expression(state.goal.clone());
+            let mut new_state = state.clone();
+            new_state.goal = goal;
+
+            for (name, intro) in zip(names, intros) {
+                if !new_state.context.contains(&intro) {
+                    new_state.hyp.insert(name.clone(), intro.clone());
+                    new_state.context.insert(intro);
+                }
+            }
+
+            Ok(vec![Rc::new(new_state)])
         }
     }
 }
@@ -223,58 +296,6 @@ impl Solver {
         }
     }
 
-    fn unfold_expression(mut expr: Rc<Expression>) -> (Vec<Rc<Expression>>, Rc<Expression>) {
-        let mut premise = Vec::new();
-        while let Expression::Implication(imp) = &*expr {
-            premise.push(imp.left.clone());
-            expr = imp.right.clone();
-        }
-        (premise, expr)
-    }
-
-    fn use_tactic(&mut self, state: &Rc<State>, tactic: &Tactic) -> Result<Vec<Rc<State>>> {
-        match tactic {
-            Tactic::Apply(name) => {
-                let hyp = if let Some(hyp) = state.hyp.get(name) {
-                    hyp
-                } else {
-                    bail!(TacticError::WrongName(name.clone()));
-                }
-                .clone();
-
-                let (to_prove, hyp) = Solver::unfold_expression(hyp);
-                if hyp != state.goal {
-                    bail!(TacticError::WrongHypothesis);
-                }
-
-                Ok(to_prove
-                    .iter()
-                    .map(|goal| {
-                        Rc::new(State {
-                            hyp: state.hyp.clone(),
-                            context: state.context.clone(),
-                            goal: goal.clone(),
-                        })
-                    })
-                    .collect())
-            }
-            Tactic::Intros(names) => {
-                let (intros, goal) = Solver::unfold_expression(state.goal.clone());
-                let mut new_state = (**state).clone();
-                new_state.goal = goal;
-
-                for (name, intro) in zip(names, intros) {
-                    if !new_state.context.contains(&intro) {
-                        new_state.hyp.insert(name.clone(), intro.clone());
-                        new_state.context.insert(intro);
-                    }
-                }
-
-                Ok(vec![Rc::new(new_state)])
-            }
-        }
-    }
-
     fn sample_proof(&self, solved: HashMap<Rc<State>, usize>, state: &Rc<State>) -> Vec<ProofStep> {
         let mut proof = Vec::new();
         let mut states = vec![state.clone()];
@@ -321,7 +342,7 @@ impl Solver {
         while let Some(expand) = order.pop_front() {
             if !self.states.contains_key(&expand) {
                 let tactics = if let Expression::Implication(_) = *expand.goal {
-                    let (intros, _) = Solver::unfold_expression(expand.goal.clone());
+                    let (intros, _) = unfold_expression(expand.goal.clone());
                     let mut names = Vec::new();
                     for intro in intros {
                         names.push((self.naming)(&intro));
@@ -337,7 +358,7 @@ impl Solver {
 
                 let mut tactic_apps = Vec::new();
                 for tactic in tactics {
-                    if let Ok(states) = self.use_tactic(&expand, &tactic) {
+                    if let Ok(states) = use_tactic(&expand, &tactic) {
                         for state in &states {
                             required
                                 .entry(state.clone())
@@ -424,11 +445,7 @@ mod tests {
         let goal = parse(tokens.as_slice()).unwrap();
 
         let mut solver = Solver::new(name_simple_hypothesis());
-        let proof = solver.find_shortest(&Rc::new(State {
-            hyp: BTreeMap::new(),
-            context: BTreeSet::new(),
-            goal,
-        }));
+        let proof = solver.find_shortest(&Rc::new(State::new(goal)));
 
         println!("{:?}", proof);
         for step in proof {

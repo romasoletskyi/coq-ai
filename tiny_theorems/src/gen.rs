@@ -4,7 +4,6 @@ use std::hash::{Hash, Hasher};
 use std::io::Write;
 use std::rc::Rc;
 
-use rand::SeedableRng;
 use rand::{seq::SliceRandom, Rng};
 use rand_chacha::ChaCha8Rng;
 
@@ -15,8 +14,8 @@ use crate::valid::analyze;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Statement {
-    pub(crate) hyp: Vec<Rc<Expression>>,
-    pub(crate) goal: Rc<Expression>,
+    pub hyp: Vec<Rc<Expression>>,
+    pub goal: Rc<Expression>,
 }
 
 impl Display for Statement {
@@ -42,7 +41,7 @@ impl Statement {
         }
     }
 
-    fn to_expression(&self) -> Rc<Expression> {
+    pub fn to_expression(&self) -> Rc<Expression> {
         let mut expr = self.goal.clone();
         for hypothesis in self.hyp.iter().rev() {
             expr = Rc::new(Expression::Implication(Implication {
@@ -281,70 +280,6 @@ impl StatementGenerator {
     }
 }
 
-pub struct TheoremPrinter {
-    names: HashSet<String>,
-    rng: ChaCha8Rng,
-}
-
-impl TheoremPrinter {
-    pub fn new() -> Self {
-        TheoremPrinter {
-            names: HashSet::new(),
-            rng: ChaCha8Rng::from_entropy(),
-        }
-    }
-
-    fn generate_name(&mut self) -> String {
-        let mut name = String::new();
-        for _ in 0..6 {
-            name.push(self.rng.gen_range('a'..'{'));
-        }
-        name
-    }
-
-    pub fn insert_name(&mut self, name: String) {
-        self.names.insert(name);
-    }
-
-    pub fn print(
-        &mut self,
-        f: &mut dyn Write,
-        symbols: &[char],
-        statement: &Statement,
-        proof: &Vec<ProofStep>,
-    ) -> std::io::Result<()> {
-        let mut name = String::new();
-        loop {
-            name = self.generate_name();
-            if !self.names.contains(&name) {
-                self.names.insert(name.clone());
-                break;
-            }
-        }
-
-        write!(f, "Theorem {}: forall (", name)?;
-        for (i, symbol) in symbols.iter().enumerate() {
-            if i > 0 {
-                write!(f, " ")?;
-            }
-            write!(f, "{}", symbol)?;
-        }
-        writeln!(f, " : Prop), {}.", statement.to_expression())?;
-        writeln!(f, "Proof.")?;
-        write!(
-            f,
-            "{}",
-            ProofStep::Intros(symbols.iter().map(|c| c.to_string()).collect())
-        )?;
-
-        for step in proof {
-            write!(f, "{}", step)?;
-        }
-
-        writeln!(f, "\nQed.")
-    }
-}
-
 pub struct StatementBank {
     pub hashes: HashSet<u64>,
 }
@@ -377,7 +312,8 @@ impl StatementBank {
 
 #[cfg(test)]
 mod tests {
-    use super::{generate_prop_symbols, Mutator, StatementGenerator, TheoremPrinter};
+    use super::{generate_prop_symbols, Mutator, StatementGenerator};
+    use crate::theorem::{Theorem, TheoremNameGenerator};
 
     #[test]
     fn mutate_statements() {
@@ -390,7 +326,7 @@ mod tests {
             Mutator::new(vec![0.2, 0.2, 0.2, 0.2, 0.1, 0.1], 0.5),
             0,
         );
-        let mut printer = TheoremPrinter::new();
+        let mut name_gen = TheoremNameGenerator::new();
 
         let sample = 10;
         let pool = 10;
@@ -405,11 +341,16 @@ mod tests {
 
             let cut_len = mutated.len().min(pool);
             for i in 0..cut_len {
-                let mut handle = std::io::stdout().lock();
                 let (statement, proof) = &mutated[i];
-                printer
-                    .print(&mut handle, &symbols, statement, proof)
-                    .unwrap();
+                print!(
+                    "{}",
+                    Theorem::new(
+                        name_gen.generate_name(),
+                        symbols.clone(),
+                        statement.clone(),
+                        proof.clone()
+                    )
+                );
             }
 
             statements = mutated[..cut_len]

@@ -15,9 +15,9 @@ use crate::solver::ProofStep;
 
 pub struct Theorem {
     name: String,
-    props: Vec<char>,
+    pub props: Vec<char>,
     pub statement: Statement,
-    proof: Vec<ProofStep>,
+    pub proof: Vec<ProofStep>,
 }
 
 impl Theorem {
@@ -140,7 +140,8 @@ impl<'a> TheoremParser<'a> {
     }
 
     pub fn next(&mut self) -> Result<Theorem> {
-        if &self.read_amount(8)? != "Theorem " {
+        self.read_until(|ch| ch == 'T')?;
+        if &self.read_amount(7)? != "heorem " {
             bail!("doesn't start with theorem");
         }
         let name = self.read_amount(6)?;
@@ -172,6 +173,7 @@ impl<'a> TheoremParser<'a> {
             bail!("doesn't begin with Proof");
         }
 
+        let mut prop_intro = false;
         let mut proof = Vec::new();
         loop {
             let chunk = self.read_until(stop)?;
@@ -179,7 +181,11 @@ impl<'a> TheoremParser<'a> {
             if data == "Qed" {
                 break;
             } else {
-                proof.extend(Self::parse_tactic(data)?.into_iter());
+                if prop_intro {
+                    proof.extend(Self::parse_tactic(data)?.into_iter());
+                } else {
+                    prop_intro = true;
+                }
             }
         }
 

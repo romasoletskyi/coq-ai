@@ -11,6 +11,27 @@ struct Alphabet {
     current: u8,
 }
 
+pub fn rename_expression(expr: &Rc<Expression>, rename: &dyn Fn(&char) -> char) -> Rc<Expression> {
+    Rc::new(match &**expr {
+        Expression::Basic(letter) => Expression::Basic(rename(letter)),
+        Expression::Implication(imp) => Expression::Implication(Implication {
+            left: rename_expression(&imp.left, rename),
+            right: rename_expression(&imp.right, rename),
+        }),
+    })
+}
+
+pub fn rename_statement(statement: &Statement, rename: &dyn Fn(&char) -> char) -> Statement {
+    Statement {
+        hyp: statement
+            .hyp
+            .iter()
+            .map(|x| rename_expression(x, rename))
+            .collect(),
+        goal: rename_expression(&statement.goal, rename),
+    }
+}
+
 impl Alphabet {
     fn new() -> Self {
         Alphabet {
@@ -78,14 +99,8 @@ impl Alphabet {
     }
 
     fn rename_expression(&self, expr: &Rc<Expression>) -> Rc<Expression> {
-        Rc::new(match &**expr {
-            Expression::Basic(letter) => {
-                Expression::Basic(b'A'.wrapping_add(*self.map.get(letter).unwrap()) as char)
-            }
-            Expression::Implication(imp) => Expression::Implication(Implication {
-                left: self.rename_expression(&imp.left),
-                right: self.rename_expression(&imp.right),
-            }),
+        rename_expression(expr, &|x| {
+            b'A'.wrapping_add(*self.map.get(x).unwrap()) as char
         })
     }
 }

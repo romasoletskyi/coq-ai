@@ -1,51 +1,29 @@
 use std::fs::{File, OpenOptions};
-use std::io::{BufWriter, Read, Write};
+use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
 
 use tiny_theorems::gen::{
-    generate_prop_symbols, Mutator, Statement, StatementBank, StatementGenerator, TheoremPrinter,
-    UniqueStatement,
+    generate_prop_symbols, Mutator, Statement, StatementBank, StatementGenerator, UniqueStatement,
 };
-use tiny_theorems::parser::{parse, tokenize};
-use tiny_theorems::refine::NormalStatement;
+use tiny_theorems::theorem::{Theorem, TheoremNameGenerator, TheoremParser};
 use tiny_theorems::utility::share;
-
-fn parse_theorems(data: &str) -> Vec<(String, Statement)> {
-    let mut theorems = Vec::new();
-    for line in data.split('\n') {
-        if line.starts_with("Theorem") {
-            let (head, body) = line.split_once(',').expect(line);
-            let name = head.split_once(':').unwrap().0.split_once(' ').unwrap().1;
-
-            let tokens = tokenize(body.trim_start().trim_end_matches('.')).unwrap();
-            let expr = parse(&tokens).unwrap();
-            let statement = NormalStatement::new(Statement::new(expr));
-
-            theorems.push((name.to_string(), statement.into()))
-        }
-    }
-    theorems
-}
 
 fn main() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("dataset")
         .join("letter4.v");
 
-    let mut printer = TheoremPrinter::new();
+    let mut name_gen = TheoremNameGenerator::new();
     let mut seen = StatementBank::new();
 
     if path.exists() {
         let mut file = File::open(path.clone()).unwrap();
-        let mut buf = String::new();
-        file.read_to_string(&mut buf).unwrap();
+        let mut parser = TheoremParser::new(&mut file);
 
-        let theorems = parse_theorems(&buf);
-        for (name, statement) in theorems {
-            printer.insert_name(name);
-            seen.insert(&statement);
+        while let Ok(theorem) = parser.next() {
+            seen.insert(&theorem.statement);
         }
 
         println!("Loaded {} theorems", seen.hashes.len());
@@ -131,9 +109,17 @@ fn main() {
         for (statement, proof) in &mutated {
             if !seen.contains(statement) {
                 seen.insert(statement);
-                printer
-                    .print(&mut file, &symbols, statement, proof)
-                    .unwrap();
+                write!(
+                    &mut file,
+                    "{}",
+                    Theorem::new(
+                        name_gen.generate_name(),
+                        symbols.clone(),
+                        statement.clone(),
+                        proof.clone()
+                    )
+                )
+                .unwrap();
             }
         }
 
