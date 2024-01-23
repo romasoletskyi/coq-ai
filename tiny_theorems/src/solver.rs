@@ -32,11 +32,23 @@ pub struct State {
 
 impl State {
     pub fn new(goal: Rc<Expression>) -> State {
-        State { hyp: BTreeMap::new(), context: BTreeSet::new(), goal }
+        State {
+            hyp: BTreeMap::new(),
+            context: BTreeSet::new(),
+            goal,
+        }
     }
 
     pub fn from_statement(namer: &mut Namer, statement: &Statement) -> State {
-        State { hyp: statement.hyp.iter().map(|x| (namer(x), x.clone())).collect(), context: BTreeSet::new(), goal: statement.goal.clone() }
+        State {
+            hyp: statement
+                .hyp
+                .iter()
+                .map(|x| (namer(x), x.clone()))
+                .collect(),
+            context: BTreeSet::new(),
+            goal: statement.goal.clone(),
+        }
     }
 }
 
@@ -76,7 +88,7 @@ impl From<ProofStep> for Option<Tactic> {
         match value {
             ProofStep::Apply(hyp) => Some(Tactic::Apply(hyp)),
             ProofStep::Intros(intros) => Some(Tactic::Intros(intros)),
-            _ => None
+            _ => None,
         }
     }
 }

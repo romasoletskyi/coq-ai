@@ -8,7 +8,7 @@ use rand::{seq::SliceRandom, Rng};
 use rand_chacha::ChaCha8Rng;
 
 use crate::parser::{Expression, Implication, UniqueExpression};
-use crate::refine::NormalStatement;
+use crate::refiner::NormalStatement;
 use crate::solver::{get_proof, ProofStep};
 use crate::valid::analyze;
 

@@ -1,5 +1,5 @@
 use std::fs::{File, OpenOptions};
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, BufReader, Write};
 use std::path::Path;
 use std::sync::mpsc;
 use std::thread;
@@ -19,7 +19,7 @@ fn main() {
     let mut seen = StatementBank::new();
 
     if path.exists() {
-        let mut file = File::open(path.clone()).unwrap();
+        let mut file = BufReader::new(File::open(path.clone()).unwrap());
         let mut parser = TheoremParser::new(&mut file);
 
         while let Ok(theorem) = parser.next() {

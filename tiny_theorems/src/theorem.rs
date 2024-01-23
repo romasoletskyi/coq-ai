@@ -10,9 +10,15 @@ use anyhow::{bail, Result};
 
 use crate::gen::Statement;
 use crate::parser::{parse, tokenize};
-use crate::refine::NormalStatement;
+use crate::refiner::NormalStatement;
 use crate::solver::ProofStep;
 
+// We consider theorems of form 
+// forall (A, B, ... : Prop), ...
+// Introduction of A, B variables is done as a part of theorem premise, 
+// proof begins with intoduction of the expression hypotheses
+
+#[derive(Debug)]
 pub struct Theorem {
     name: String,
     pub props: Vec<char>,
@@ -76,10 +82,17 @@ impl TheoremNameGenerator {
 
     pub fn generate_name(&mut self) -> String {
         let mut name = String::new();
-        for _ in 0..6 {
-            name.push(self.rng.gen_range('a'..'{'));
+        loop {
+            for _ in 0..6 {
+                name.push(self.rng.gen_range('a'..'{'));
+            }
+            if !self.names.contains(&name) {
+                self.names.insert(name.clone());
+                break;
+            } else {
+                name.clear();
+            }
         }
-        self.names.insert(name.clone());
         name
     }
 }
@@ -209,6 +222,10 @@ mod tests {
         let mut parser = TheoremParser::new(&mut cursor);
         let theorem = parser.next().unwrap();
         println!("{}", theorem);
+        println!(
+            "Error: {}",
+            parser.next().expect_err("there is no second theorem")
+        );
     }
 
     #[test]
@@ -220,6 +237,6 @@ mod tests {
             + apply HAB. apply HA. 
             + apply HA. 
           - apply HABB. intros HA0. apply HAB. apply HA0. 
-        Qed.");
+        Qed.\n");
     }
 }
