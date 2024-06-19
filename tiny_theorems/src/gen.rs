@@ -1,8 +1,7 @@
 use std::collections::{hash_map::DefaultHasher, HashMap, HashSet};
 use std::fmt::Display;
 use std::hash::{Hash, Hasher};
-use std::io::Write;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use rand::{seq::SliceRandom, Rng};
 use rand_chacha::ChaCha8Rng;
@@ -14,8 +13,8 @@ use crate::valid::analyze;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Statement {
-    pub hyp: Vec<Rc<Expression>>,
-    pub goal: Rc<Expression>,
+    pub hyp: Vec<Arc<Expression>>,
+    pub goal: Arc<Expression>,
 }
 
 impl Display for Statement {
@@ -34,17 +33,17 @@ impl From<UniqueStatement> for Statement {
 }
 
 impl Statement {
-    pub fn new(goal: Rc<Expression>) -> Self {
+    pub fn new(goal: Arc<Expression>) -> Self {
         Statement {
             hyp: Vec::new(),
             goal,
         }
     }
 
-    pub fn to_expression(&self) -> Rc<Expression> {
+    pub fn to_expression(&self) -> Arc<Expression> {
         let mut expr = self.goal.clone();
         for hypothesis in self.hyp.iter().rev() {
-            expr = Rc::new(Expression::Implication(Implication {
+            expr = Arc::new(Expression::Implication(Implication {
                 left: hypothesis.clone(),
                 right: expr,
             }));
@@ -102,9 +101,9 @@ impl Mutator {
     fn choose_goal<R: Rng + ?Sized>(
         &self,
         rng: &mut R,
-        old: Rc<Expression>,
-        new: &Vec<Rc<Expression>>,
-    ) -> Rc<Expression> {
+        old: Arc<Expression>,
+        new: &Vec<Arc<Expression>>,
+    ) -> Arc<Expression> {
         let p = rng.gen_range(0.0..1.0);
         if p < self.goal_change_prob {
             new[rng.gen_range(0..new.len())].clone()
@@ -149,33 +148,33 @@ impl StatementGenerator {
         symbols[..num].to_vec()
     }
 
-    fn gen_hypothesis(&mut self) -> Rc<Expression> {
-        Rc::new(match self.mutator.get_hyp_index(&mut self.rng) {
+    fn gen_hypothesis(&mut self) -> Arc<Expression> {
+        Arc::new(match self.mutator.get_hyp_index(&mut self.rng) {
             0 => Expression::Basic(self.gen_char()),
             1 => {
                 let s = self.gen_different_chars(2);
                 Expression::Implication(Implication {
-                    left: Rc::new(Expression::Basic(s[0])),
-                    right: Rc::new(Expression::Basic(s[1])),
+                    left: Arc::new(Expression::Basic(s[0])),
+                    right: Arc::new(Expression::Basic(s[1])),
                 })
             }
             2 => {
                 let s = self.gen_different_chars(2);
                 Expression::Implication(Implication {
-                    left: Rc::new(Expression::Implication(Implication {
-                        left: Rc::new(Expression::Basic(s[0])),
-                        right: Rc::new(Expression::Basic(s[1])),
+                    left: Arc::new(Expression::Implication(Implication {
+                        left: Arc::new(Expression::Basic(s[0])),
+                        right: Arc::new(Expression::Basic(s[1])),
                     })),
-                    right: Rc::new(Expression::Basic(self.gen_char())),
+                    right: Arc::new(Expression::Basic(self.gen_char())),
                 })
             }
             3 => {
                 let s = self.gen_different_chars(3);
                 Expression::Implication(Implication {
-                    left: Rc::new(Expression::Basic(s[0])),
-                    right: Rc::new(Expression::Implication(Implication {
-                        left: Rc::new(Expression::Basic(s[1])),
-                        right: Rc::new(Expression::Basic(s[2])),
+                    left: Arc::new(Expression::Basic(s[0])),
+                    right: Arc::new(Expression::Implication(Implication {
+                        left: Arc::new(Expression::Basic(s[1])),
+                        right: Arc::new(Expression::Basic(s[2])),
                     })),
                 })
             }
@@ -183,25 +182,25 @@ impl StatementGenerator {
                 let s = self.gen_different_chars(2);
                 let t = self.gen_different_chars(2);
                 Expression::Implication(Implication {
-                    left: Rc::new(Expression::Implication(Implication {
-                        left: Rc::new(Expression::Basic(s[0])),
-                        right: Rc::new(Expression::Basic(s[1])),
+                    left: Arc::new(Expression::Implication(Implication {
+                        left: Arc::new(Expression::Basic(s[0])),
+                        right: Arc::new(Expression::Basic(s[1])),
                     })),
-                    right: Rc::new(Expression::Implication(Implication {
-                        left: Rc::new(Expression::Basic(t[0])),
-                        right: Rc::new(Expression::Basic(t[1])),
+                    right: Arc::new(Expression::Implication(Implication {
+                        left: Arc::new(Expression::Basic(t[0])),
+                        right: Arc::new(Expression::Basic(t[1])),
                     })),
                 })
             }
             _ => {
                 let s = self.gen_different_chars(4);
                 Expression::Implication(Implication {
-                    left: Rc::new(Expression::Basic(s[0])),
-                    right: Rc::new(Expression::Implication(Implication {
-                        left: Rc::new(Expression::Basic(s[1])),
-                        right: Rc::new(Expression::Implication(Implication {
-                            left: Rc::new(Expression::Basic(s[2])),
-                            right: Rc::new(Expression::Basic(s[3])),
+                    left: Arc::new(Expression::Basic(s[0])),
+                    right: Arc::new(Expression::Implication(Implication {
+                        left: Arc::new(Expression::Basic(s[1])),
+                        right: Arc::new(Expression::Implication(Implication {
+                            left: Arc::new(Expression::Basic(s[2])),
+                            right: Arc::new(Expression::Basic(s[3])),
                         })),
                     })),
                 })
@@ -210,7 +209,7 @@ impl StatementGenerator {
     }
 
     pub fn initalize_statement(symbols: &[char]) -> Statement {
-        let goal = Rc::new(Expression::Basic(symbols[0]));
+        let goal = Arc::new(Expression::Basic(symbols[0]));
         Statement {
             hyp: vec![goal.clone()],
             goal,

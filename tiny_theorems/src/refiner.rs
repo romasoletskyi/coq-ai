@@ -1,6 +1,6 @@
 use std::collections::{hash_map::DefaultHasher, HashMap};
 use std::hash::Hasher;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::gen::Statement;
 use crate::parser::{Expression, Implication};
@@ -11,8 +11,8 @@ struct Alphabet {
     current: u8,
 }
 
-pub fn rename_expression(expr: &Rc<Expression>, rename: &dyn Fn(&char) -> char) -> Rc<Expression> {
-    Rc::new(match &**expr {
+pub fn rename_expression(expr: &Arc<Expression>, rename: &dyn Fn(&char) -> char) -> Arc<Expression> {
+    Arc::new(match &**expr {
         Expression::Basic(letter) => Expression::Basic(rename(letter)),
         Expression::Implication(imp) => Expression::Implication(Implication {
             left: rename_expression(&imp.left, rename),
@@ -41,7 +41,7 @@ impl Alphabet {
         }
     }
 
-    fn encode_hypothesis(&mut self, expr: &Rc<Expression>) {
+    fn encode_hypothesis(&mut self, expr: &Arc<Expression>) {
         let mut hasher = DefaultHasher::new();
         let mut traces = Vec::new();
         let mut nodes = vec![expr.clone()];
@@ -98,7 +98,7 @@ impl Alphabet {
         }
     }
 
-    fn rename_expression(&self, expr: &Rc<Expression>) -> Rc<Expression> {
+    fn rename_expression(&self, expr: &Arc<Expression>) -> Arc<Expression> {
         rename_expression(expr, &|x| {
             b'A'.wrapping_add(*self.map.get(x).unwrap()) as char
         })

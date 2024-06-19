@@ -1,12 +1,12 @@
 use std::fmt::Display;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use anyhow::{bail, Ok, Result};
 
 use crate::{gen::Statement, solver::{use_tactic, ProofStep, State}};
 
 #[derive(Debug)]
-enum EnvError {
+pub enum EnvError {
     UnsolvedGoals,
     OutsideProof
 }
@@ -21,7 +21,7 @@ impl Display for EnvError {
 }
 
 pub struct Env {
-    states: Vec<Rc<State>>
+    states: Vec<Arc<State>>
 }
 
 impl Env {
@@ -29,13 +29,17 @@ impl Env {
         Env { states: Vec::new() }
     }
 
-    pub fn current_state(&self) -> Option<Rc<State>> {
-        self.states.last().cloned()
+    pub fn current_state(&self) -> Option<&Arc<State>> {
+        self.states.last()
+    }
+
+    pub fn reset(&mut self) {
+        self.states.clear();
     }
 
     pub fn load_statement(&mut self, statement: &Statement) -> Result<()> {
         if self.states.is_empty() {
-            self.states = vec![Rc::new(State::new(statement.to_expression()))];
+            self.states = vec![Arc::new(State::new(statement.to_expression()))];
             Ok(())
         } else {
             bail!(EnvError::UnsolvedGoals);
@@ -43,13 +47,13 @@ impl Env {
     }
 
     pub fn step(&mut self, step: ProofStep) -> Result<()> {
-        if let Some(state) = self.states.pop() {
+        if let Some(state) = self.states.last() {
             if let Some(tactic) = step.into() {
-                for state in use_tactic(&state, &tactic)?.into_iter().rev() {
-                    self.states.push(state);
-                }
-            } else {
-                self.states.push(state);
+                use_tactic(state, &tactic).and_then(|states| {
+                    self.states.pop();
+                    self.states.extend(states.into_iter().rev());
+                    Ok(())
+                })?;
             }
             Ok(())
         } else {

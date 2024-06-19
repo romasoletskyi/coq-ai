@@ -6,7 +6,7 @@ use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, anyhow, Result};
 
 use crate::gen::Statement;
 use crate::parser::{parse, tokenize};
@@ -129,15 +129,23 @@ impl<'a> TheoremParser<'a> {
 
     fn parse_tactic(data: &str) -> Result<Vec<ProofStep>> {
         if data.starts_with("apply") {
-            return Ok(vec![ProofStep::Apply(data[6..].to_string())]);
+            if data.len() > 6 {
+                return Ok(vec![ProofStep::Apply(data[6..].to_string())]);
+            } else {
+                bail!("no hypothesis after apply");
+            }
         }
         if data.starts_with("intros") {
-            return Ok(vec![ProofStep::Intros(
-                data[7..].split(' ').map(|x| x.to_string()).collect(),
-            )]);
+            if data.len() > 7 {
+                return Ok(vec![ProofStep::Intros(
+                    data[7..].split(' ').map(|x| x.to_string()).collect(),
+                )]);
+            } else {
+                bail!("no hypothesis after intros");
+            }
         }
         if data.starts_with(['-', '+', '*']) {
-            let (bullet, left) = data.split_once(' ').unwrap();
+            let (bullet, left) = data.split_once(' ').ok_or(anyhow!("no space after bullet point"))?;
             let level = 1
                 + 3 * (bullet.len() - 1)
                 + match bullet.chars().next().unwrap() {
@@ -180,7 +188,7 @@ impl<'a> TheoremParser<'a> {
         let data = self.read_until(stop)?;
         let tokens = tokenize(&data)?;
         let expr = parse(tokens.as_slice())?;
-        let statement = NormalStatement::new(Statement::new(expr)).into();
+        let statement = Statement::new(expr).into();
 
         if !self.read_until(stop)?.ends_with("Proof") {
             bail!("doesn't begin with Proof");
@@ -191,7 +199,7 @@ impl<'a> TheoremParser<'a> {
         loop {
             let chunk = self.read_until(stop)?;
             let data = chunk.trim();
-            if data == "Qed" {
+            if data.ends_with("Qed") {
                 break;
             } else {
                 if prop_intro {

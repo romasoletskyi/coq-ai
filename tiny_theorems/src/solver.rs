@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt::Display;
 use std::iter::zip;
-use std::rc::Rc;
+use std::sync::Arc;
 
 use anyhow::{bail, Result};
 
@@ -25,13 +25,13 @@ using breadth-first search. */
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct State {
-    pub hyp: BTreeMap<String, Rc<Expression>>,
-    context: BTreeSet<Rc<Expression>>,
-    pub goal: Rc<Expression>,
+    pub hyp: BTreeMap<String, Arc<Expression>>,
+    context: BTreeSet<Arc<Expression>>,
+    pub goal: Arc<Expression>,
 }
 
 impl State {
-    pub fn new(goal: Rc<Expression>) -> State {
+    pub fn new(goal: Arc<Expression>) -> State {
         State {
             hyp: BTreeMap::new(),
             context: BTreeSet::new(),
@@ -93,7 +93,7 @@ impl From<ProofStep> for Option<Tactic> {
     }
 }
 
-pub fn unfold_expression(mut expr: Rc<Expression>) -> (Vec<Rc<Expression>>, Rc<Expression>) {
+pub fn unfold_expression(mut expr: Arc<Expression>) -> (Vec<Arc<Expression>>, Arc<Expression>) {
     let mut premise = Vec::new();
     while let Expression::Implication(imp) = &*expr {
         premise.push(imp.left.clone());
@@ -102,7 +102,7 @@ pub fn unfold_expression(mut expr: Rc<Expression>) -> (Vec<Rc<Expression>>, Rc<E
     (premise, expr)
 }
 
-pub fn use_tactic(state: &State, tactic: &Tactic) -> Result<Vec<Rc<State>>> {
+pub fn use_tactic(state: &State, tactic: &Tactic) -> Result<Vec<Arc<State>>> {
     match tactic {
         Tactic::Apply(name) => {
             let hyp = if let Some(hyp) = state.hyp.get(name) {
@@ -120,7 +120,7 @@ pub fn use_tactic(state: &State, tactic: &Tactic) -> Result<Vec<Rc<State>>> {
             Ok(to_prove
                 .iter()
                 .map(|goal| {
-                    Rc::new(State {
+                    Arc::new(State {
                         hyp: state.hyp.clone(),
                         context: state.context.clone(),
                         goal: goal.clone(),
@@ -140,7 +140,7 @@ pub fn use_tactic(state: &State, tactic: &Tactic) -> Result<Vec<Rc<State>>> {
                 }
             }
 
-            Ok(vec![Rc::new(new_state)])
+            Ok(vec![Arc::new(new_state)])
         }
     }
 }
@@ -201,7 +201,7 @@ impl Display for TacticError {
 
 // A common util for hypothesis naming
 
-fn search_names(props: &mut Vec<char>, expr: &Rc<Expression>) {
+fn search_names(props: &mut Vec<char>, expr: &Arc<Expression>) {
     match &**expr {
         Expression::Implication(implication) => {
             search_names(props, &implication.left);
@@ -213,13 +213,13 @@ fn search_names(props: &mut Vec<char>, expr: &Rc<Expression>) {
     }
 }
 
-pub fn find_names(expr: &Rc<Expression>) -> Vec<char> {
+pub fn find_names(expr: &Arc<Expression>) -> Vec<char> {
     let mut props = Vec::new();
     search_names(&mut props, expr);
     props
 }
 
-type Namer = Box<dyn FnMut(&Rc<Expression>) -> String>;
+type Namer = Box<dyn FnMut(&Arc<Expression>) -> String>;
 
 pub fn name_simple_hypothesis() -> Namer {
     let mut storage: HashSet<String> = HashSet::new();
@@ -249,13 +249,13 @@ pub fn name_simple_hypothesis() -> Namer {
 
 struct TacticApplication {
     tactic: Tactic,
-    states: Vec<Rc<State>>,
+    states: Vec<Arc<State>>,
 }
 
 #[derive(Debug)]
 struct TacticChecker {
-    required: HashSet<Rc<State>>,
-    satisfied: HashSet<Rc<State>>,
+    required: HashSet<Arc<State>>,
+    satisfied: HashSet<Arc<State>>,
 }
 
 #[derive(Debug)]
@@ -279,7 +279,7 @@ impl RequirementChecker {
         }
     }
 
-    fn satisfied(&mut self, state: &Rc<State>) {
+    fn satisfied(&mut self, state: &Arc<State>) {
         if self.solution.is_some() {
             return;
         }
@@ -297,7 +297,7 @@ impl RequirementChecker {
 
 pub struct Solver {
     naming: Namer,
-    states: HashMap<Rc<State>, Vec<TacticApplication>>,
+    states: HashMap<Arc<State>, Vec<TacticApplication>>,
 }
 
 impl Solver {
@@ -308,7 +308,7 @@ impl Solver {
         }
     }
 
-    fn sample_proof(&self, solved: HashMap<Rc<State>, usize>, state: &Rc<State>) -> Vec<ProofStep> {
+    fn sample_proof(&self, solved: HashMap<Arc<State>, usize>, state: &Arc<State>) -> Vec<ProofStep> {
         let mut proof = Vec::new();
         let mut states = vec![state.clone()];
         let mut levels = vec![(0, false)];
@@ -344,7 +344,7 @@ impl Solver {
         proof
     }
 
-    fn find_shortest(&mut self, state: &Rc<State>) -> Vec<ProofStep> {
+    fn find_shortest(&mut self, state: &Arc<State>) -> Vec<ProofStep> {
         let mut order = VecDeque::new();
         let mut solved = HashMap::new();
         let mut required: HashMap<_, Vec<_>> = HashMap::new();
@@ -431,9 +431,9 @@ impl Solver {
     }
 }
 
-pub fn get_proof(goal: Rc<Expression>) -> Vec<ProofStep> {
+pub fn get_proof(goal: Arc<Expression>) -> Vec<ProofStep> {
     let mut solver = Solver::new(name_simple_hypothesis());
-    solver.find_shortest(&Rc::new(State {
+    solver.find_shortest(&Arc::new(State {
         hyp: BTreeMap::new(),
         context: BTreeSet::new(),
         goal,
@@ -449,7 +449,7 @@ mod tests {
     };
     use std::{
         collections::{BTreeMap, BTreeSet},
-        rc::Rc,
+        sync::Arc
     };
 
     fn check(data: &str) {
@@ -457,7 +457,7 @@ mod tests {
         let goal = parse(tokens.as_slice()).unwrap();
 
         let mut solver = Solver::new(name_simple_hypothesis());
-        let proof = solver.find_shortest(&Rc::new(State::new(goal)));
+        let proof = solver.find_shortest(&Arc::new(State::new(goal)));
 
         println!("{:?}", proof);
         for step in proof {
@@ -475,7 +475,7 @@ mod tests {
             let goal = parse(tokens.as_slice()).unwrap();
 
             let mut solver = Solver::new(name_simple_hypothesis());
-            solver.find_shortest(&Rc::new(State {
+            solver.find_shortest(&Arc::new(State {
                 hyp: BTreeMap::new(),
                 context: BTreeSet::new(),
                 goal,

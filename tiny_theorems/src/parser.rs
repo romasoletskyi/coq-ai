@@ -1,5 +1,5 @@
 use anyhow::{bail, Result};
-use std::{fmt::Display, rc::Rc, str::Chars};
+use std::{fmt::Display, sync::Arc, str::Chars};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum TokenKind {
@@ -114,8 +114,8 @@ pub fn tokenize(data: &str) -> Result<Vec<Token>> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Implication {
-    pub left: Rc<Expression>,
-    pub right: Rc<Expression>,
+    pub left: Arc<Expression>,
+    pub right: Arc<Expression>,
 }
 
 impl Display for Implication {
@@ -143,9 +143,9 @@ impl Display for Expression {
     }
 }
 
-impl From<Box<UniqueExpression>> for Rc<Expression> {
+impl From<Box<UniqueExpression>> for Arc<Expression> {
     fn from(value: Box<UniqueExpression>) -> Self {
-        Rc::new(match *value {
+        Arc::new(match *value {
             UniqueExpression::Basic(char) => Expression::Basic(char),
             UniqueExpression::Implication(imp) => Expression::Implication(Implication {
                 left: imp.left.into(),
@@ -165,8 +165,8 @@ pub enum UniqueExpression {
     Basic(char),
 }
 
-impl From<Rc<Expression>> for Box<UniqueExpression> {
-    fn from(value: Rc<Expression>) -> Self {
+impl From<Arc<Expression>> for Box<UniqueExpression> {
+    fn from(value: Arc<Expression>) -> Self {
         Box::new(match &*value {
             Expression::Basic(char) => UniqueExpression::Basic(*char),
             Expression::Implication(imp) => UniqueExpression::Implication(UniqueImplication {
@@ -199,7 +199,7 @@ impl<'a> Parser<'a> {
         self.index += 1;
     }
 
-    fn parse_basic(&mut self) -> Result<Rc<Expression>> {
+    fn parse_basic(&mut self) -> Result<Arc<Expression>> {
         match self.current()? {
             TokenKind::LeftBracket => {
                 self.advance();
@@ -209,18 +209,18 @@ impl<'a> Parser<'a> {
             }
             TokenKind::Symbol(c) => {
                 self.advance();
-                Ok(Rc::new(Expression::Basic(c)))
+                Ok(Arc::new(Expression::Basic(c)))
             }
             TokenKind::RightBracket => bail!(LexerError::UnexpectedSymbol(')')),
             TokenKind::Arrow => bail!(LexerError::UnexpectedSymbol('-')),
         }
     }
 
-    fn parse(&mut self) -> Result<Rc<Expression>> {
+    fn parse(&mut self) -> Result<Arc<Expression>> {
         let left = self.parse_basic()?;
         if let Ok(TokenKind::Arrow) = self.current() {
             self.advance();
-            Ok(Rc::new(Expression::Implication(Implication {
+            Ok(Arc::new(Expression::Implication(Implication {
                 left,
                 right: self.parse()?,
             })))
@@ -230,7 +230,7 @@ impl<'a> Parser<'a> {
     }
 }
 
-pub fn parse(tokens: &[Token]) -> Result<Rc<Expression>> {
+pub fn parse(tokens: &[Token]) -> Result<Arc<Expression>> {
     Parser::new(tokens).parse()
 }
 

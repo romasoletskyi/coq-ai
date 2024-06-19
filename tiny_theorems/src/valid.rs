@@ -1,11 +1,11 @@
 use std::collections::{HashMap, HashSet};
-use std::rc::Rc;
+use std::sync::Arc;
 
 use crate::parser::Expression;
 
 pub struct Prover {
-    hyp: HashSet<Rc<Expression>>,
-    imp: HashMap<Rc<Expression>, Vec<Rc<Expression>>>,
+    hyp: HashSet<Arc<Expression>>,
+    imp: HashMap<Arc<Expression>, Vec<Arc<Expression>>>,
 }
 
 impl Prover {
@@ -16,7 +16,7 @@ impl Prover {
         }
     }
 
-    fn insert_hyp(&mut self, hypothesis: &Rc<Expression>) {
+    fn insert_hyp(&mut self, hypothesis: &Arc<Expression>) {
         if self.hyp.contains(hypothesis) {
             return;
         }
@@ -47,7 +47,7 @@ impl Prover {
         }
     }
 
-    fn analyze(&mut self, hyp: &Vec<Rc<Expression>>) {
+    fn analyze(&mut self, hyp: &Vec<Arc<Expression>>) {
         for hypothesis in hyp {
             if !self.hyp.contains(hypothesis) {
                 self.insert_hyp(hypothesis);
@@ -55,12 +55,12 @@ impl Prover {
         }
     }
 
-    fn proven(self) -> Vec<Rc<Expression>> {
+    fn proven(self) -> Vec<Arc<Expression>> {
         self.hyp.iter().cloned().collect()
     }
 }
 
-pub fn analyze(hyp: &Vec<Rc<Expression>>) -> Vec<Rc<Expression>> {
+pub fn analyze(hyp: &Vec<Arc<Expression>>) -> Vec<Arc<Expression>> {
     let mut prover = Prover::new();
     prover.analyze(hyp);
     prover.proven()
