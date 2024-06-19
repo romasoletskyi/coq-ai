@@ -1,10 +1,13 @@
-use std::{collections::HashMap, path::Path};
 use std::fs::File;
 use std::io::{BufReader, ErrorKind};
+use std::{collections::HashMap, path::Path};
 
 use anyhow::{bail, Error, Result};
 
-use tiny_theorems::{theorem::{Theorem, TheoremParser}, env::{Env, EnvError}};
+use tiny_theorems::{
+    env::{Env, EnvError},
+    theorem::{Theorem, TheoremParser},
+};
 
 fn check_theorem(env: &mut Env, theorem: &Theorem) -> Result<()> {
     env.load_statement(&theorem.statement).unwrap();
@@ -47,24 +50,39 @@ fn main() {
                         break;
                     }
                 }
-                errors.entry(name_error(err)).or_default().push(theorems.len());
+                errors
+                    .entry(name_error(err))
+                    .or_default()
+                    .push(theorems.len());
                 fail += 1;
                 theorems.push(None);
-            },
+            }
             Result::Ok(theorem) => {
                 if let Err(err) = check_theorem(&mut env, &theorem) {
-                    errors.entry(name_error(err)).or_default().push(theorems.len());
+                    errors
+                        .entry(name_error(err))
+                        .or_default()
+                        .push(theorems.len());
                     fail += 1;
-                    env.reset();        
+                    env.reset();
                 }
                 theorems.push(Some(theorem));
             }
         }
     }
 
-    println!("Passed {} / {} theorems", theorems.len() - fail, theorems.len());
+    println!(
+        "Passed {} / {} theorems",
+        theorems.len() - fail,
+        theorems.len()
+    );
     for (err, indices) in &errors {
-        println!("{} : {} {:?}", err, indices.len(), indices[..10.min(indices.len())].to_vec());
+        println!(
+            "{} : {} {:?}",
+            err,
+            indices.len(),
+            indices[..10.min(indices.len())].to_vec()
+        );
     }
 
     let mut err_indices: Vec<usize> = Vec::new();
@@ -76,9 +94,9 @@ fn main() {
 }
 
 mod tests {
-    use std::io::Cursor;
-    use tiny_theorems::{theorem::TheoremParser, env::Env};
     use crate::check_theorem;
+    use std::io::Cursor;
+    use tiny_theorems::{env::Env, theorem::TheoremParser};
 
     fn check(data: &str) {
         let mut cursor = Cursor::new(data.as_bytes());

@@ -1,5 +1,5 @@
 use std::fs::{File, OpenOptions};
-use std::io::{BufWriter, BufReader, Write};
+use std::io::{BufReader, BufWriter, Write};
 use std::path::Path;
 use std::sync::mpsc;
 use std::thread;

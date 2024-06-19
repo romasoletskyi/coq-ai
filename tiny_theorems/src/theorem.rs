@@ -6,16 +6,15 @@ use rand::Rng;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 
-use anyhow::{bail, anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 
 use crate::gen::Statement;
 use crate::parser::{parse, tokenize};
-use crate::refiner::NormalStatement;
 use crate::solver::ProofStep;
 
-// We consider theorems of form 
+// We consider theorems of form
 // forall (A, B, ... : Prop), ...
-// Introduction of A, B variables is done as a part of theorem premise, 
+// Introduction of A, B variables is done as a part of theorem premise,
 // proof begins with intoduction of the expression hypotheses
 
 #[derive(Debug)]
@@ -127,7 +126,7 @@ impl<'a> TheoremParser<'a> {
         Ok(s)
     }
 
-    fn parse_tactic(data: &str) -> Result<Vec<ProofStep>> {
+    pub fn parse_tactic(data: &str) -> Result<Vec<ProofStep>> {
         if data.starts_with("apply") {
             if data.len() > 6 {
                 return Ok(vec![ProofStep::Apply(data[6..].to_string())]);
@@ -145,7 +144,9 @@ impl<'a> TheoremParser<'a> {
             }
         }
         if data.starts_with(['-', '+', '*']) {
-            let (bullet, left) = data.split_once(' ').ok_or(anyhow!("no space after bullet point"))?;
+            let (bullet, left) = data
+                .split_once(' ')
+                .ok_or(anyhow!("no space after bullet point"))?;
             let level = 1
                 + 3 * (bullet.len() - 1)
                 + match bullet.chars().next().unwrap() {

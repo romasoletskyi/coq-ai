@@ -7,8 +7,8 @@ use std::path::Path;
 use rand::{seq::SliceRandom, Rng, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 use tiny_theorems::{
-    gen::Statement,
     env::Env,
+    gen::Statement,
     refiner::rename_statement,
     solver::{name_simple_hypothesis, unfold_expression, use_tactic, ProofStep},
     theorem::{Theorem, TheoremNameGenerator, TheoremParser},
@@ -52,7 +52,9 @@ fn augment<R: Rng + ?Sized>(rng: &mut R, theorem: &Theorem, name: String) -> The
     for step in &theorem.proof {
         let step = match step {
             ProofStep::Bullet(level) => ProofStep::Bullet(*level),
-            ProofStep::Apply(hyp) => ProofStep::Apply(hyp_map.get(hyp).expect(&format!("{}", theorem)).clone()),
+            ProofStep::Apply(hyp) => {
+                ProofStep::Apply(hyp_map.get(hyp).expect(&format!("{}", theorem)).clone())
+            }
             ProofStep::Intros(intros) => {
                 let state = env.current_state().unwrap();
                 let (aug_intros, _) = unfold_expression(state.goal.clone());
@@ -109,7 +111,7 @@ fn main() {
                     theorems.push(theorem);
                 }
                 count += 1;
-            }   
+            }
         }
         println!("Processed {} theorems in file {}", count, name);
     }
@@ -137,11 +139,11 @@ fn main() {
 }
 
 mod tests {
-    use std::io::Cursor;
+    use crate::augment;
     use rand::SeedableRng;
     use rand_chacha::ChaCha8Rng;
+    use std::io::Cursor;
     use tiny_theorems::theorem::TheoremParser;
-    use crate::augment;
 
     fn check(data: &str) {
         let mut cursor = Cursor::new(data.as_bytes());

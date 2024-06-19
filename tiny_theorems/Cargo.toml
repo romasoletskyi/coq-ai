@@ -9,3 +9,7 @@ edition = "2021"
 anyhow = "1.0.75"
 rand = "0.8.5"
 rand_chacha = "0.3.1"
+pyo3 = { version = "0.16", features = ["extension-module", "anyhow"] }
+
+[lib]
+crate-type = ["cdylib", "lib"]

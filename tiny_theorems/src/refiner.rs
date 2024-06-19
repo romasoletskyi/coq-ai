@@ -11,7 +11,10 @@ struct Alphabet {
     current: u8,
 }
 
-pub fn rename_expression(expr: &Arc<Expression>, rename: &dyn Fn(&char) -> char) -> Arc<Expression> {
+pub fn rename_expression(
+    expr: &Arc<Expression>,
+    rename: &dyn Fn(&char) -> char,
+) -> Arc<Expression> {
     Arc::new(match &**expr {
         Expression::Basic(letter) => Expression::Basic(rename(letter)),
         Expression::Implication(imp) => Expression::Implication(Implication {

@@ -3,25 +3,28 @@ use std::sync::Arc;
 
 use anyhow::{bail, Ok, Result};
 
-use crate::{gen::Statement, solver::{use_tactic, ProofStep, State}};
+use crate::{
+    gen::Statement,
+    solver::{use_tactic, ProofStep, State},
+};
 
 #[derive(Debug)]
 pub enum EnvError {
     UnsolvedGoals,
-    OutsideProof
+    OutsideProof,
 }
 
 impl Display for EnvError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             EnvError::UnsolvedGoals => write!(f, "there are unsolved goals"),
-            EnvError::OutsideProof => write!(f, "outside of proof mode")
+            EnvError::OutsideProof => write!(f, "outside of proof mode"),
         }
     }
 }
 
 pub struct Env {
-    states: Vec<Arc<State>>
+    states: Vec<Arc<State>>,
 }
 
 impl Env {

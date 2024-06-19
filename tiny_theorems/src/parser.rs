@@ -1,5 +1,5 @@
 use anyhow::{bail, Result};
-use std::{fmt::Display, sync::Arc, str::Chars};
+use std::{fmt::Display, str::Chars, sync::Arc};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum TokenKind {

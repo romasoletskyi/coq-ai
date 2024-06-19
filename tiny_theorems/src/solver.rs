@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt::Display;
+use std::io::Write;
 use std::iter::zip;
 use std::sync::Arc;
 
@@ -60,6 +61,14 @@ impl Display for State {
         }
         write!(f, "|- {}]", self.goal)
     }
+}
+
+pub fn print_state(buf: &mut dyn Write, state: &State) -> Result<()> {
+    writeln!(buf, "[HYP]")?;
+    for (name, hyp) in &state.hyp {
+        writeln!(buf, "{}: {}", name, hyp)?;
+    }
+    Ok(write!(buf, "[GOAL]\n{}\n[TACTIC]\n", state.goal)?)
 }
 
 #[derive(Debug, Clone)]
@@ -308,7 +317,11 @@ impl Solver {
         }
     }
 
-    fn sample_proof(&self, solved: HashMap<Arc<State>, usize>, state: &Arc<State>) -> Vec<ProofStep> {
+    fn sample_proof(
+        &self,
+        solved: HashMap<Arc<State>, usize>,
+        state: &Arc<State>,
+    ) -> Vec<ProofStep> {
         let mut proof = Vec::new();
         let mut states = vec![state.clone()];
         let mut levels = vec![(0, false)];
@@ -449,7 +462,7 @@ mod tests {
     };
     use std::{
         collections::{BTreeMap, BTreeSet},
-        sync::Arc
+        sync::Arc,
     };
 
     fn check(data: &str) {
